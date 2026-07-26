@@ -10,7 +10,7 @@ export interface SimpromanaSettings {
 }
 
 export const DEFAULT_SETTINGS: SimpromanaSettings = {
-	rootFolder: "Atlas/Project Management",
+	rootFolder: "Project Management",
 	projectsFolder: "Projects",
 	tasksFolder: "Tasks",
 	referencesFolder: "Reference",
