@@ -353,7 +353,7 @@ properties:
   file.name:
     displayName: id
 views:
-  - type: kanban
+  - type: dev.kotchourko.obsidian-bases-kanban
     name: Current
     filters:
       and:
@@ -366,9 +366,9 @@ views:
       - priority
       - milestone
     sort:
-      - property: formula._tstatus_order
-        direction: ASC
-  - type: kanban
+      - property: file.mtime
+        direction: DESC
+  - type: dev.kotchourko.obsidian-bases-kanban
     name: Board
     groupBy:
       property: tstatus
@@ -379,8 +379,8 @@ views:
       - priority
       - milestone
     sort:
-      - property: formula._tstatus_order
-        direction: ASC
+      - property: file.mtime
+        direction: DESC
   - type: table
     name: Table
     groupBy:
