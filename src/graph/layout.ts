@@ -1,0 +1,478 @@
+import { isOrderingKind } from "./model";
+import type { TaskGraph, TaskRecord, TaskRelation } from "./model";
+
+export interface Point {
+	x: number;
+	y: number;
+}
+
+export interface LayoutNode {
+	record: TaskRecord;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	layer: number;
+	unlinked: boolean;
+}
+
+export interface LayoutEdge {
+	relation: TaskRelation;
+	points: Point[];
+	cyclic: boolean;
+}
+
+export interface GraphLayout {
+	nodes: LayoutNode[];
+	edges: LayoutEdge[];
+	width: number;
+	height: number;
+	unlinkedTop: number | null;
+}
+
+export interface LayoutOptions {
+	nodeWidth: number;
+	nodeHeight: number;
+	layerGap: number;
+	rowGap: number;
+	componentGap: number;
+	dummyHeight: number;
+}
+
+export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
+	nodeWidth: 210,
+	nodeHeight: 76,
+	layerGap: 76,
+	rowGap: 22,
+	componentGap: 56,
+	dummyHeight: 14,
+};
+
+interface Cell {
+	key: string;
+	record: TaskRecord | null;
+	layer: number;
+	order: number;
+	y: number;
+	height: number;
+}
+
+interface OrderingEdge {
+	relation: TaskRelation;
+	source: string;
+	target: string;
+	cyclic: boolean;
+	dummies: Cell[];
+}
+
+function findBackEdges(edges: TaskRelation[]): Set<TaskRelation> {
+	const outgoing = new Map<string, TaskRelation[]>();
+	for (const edge of edges) {
+		const list = outgoing.get(edge.from);
+		if (list) list.push(edge);
+		else outgoing.set(edge.from, [edge]);
+	}
+
+	const state = new Map<string, number>();
+	const back = new Set<TaskRelation>();
+
+	for (const edge of edges) {
+		for (const start of [edge.from, edge.to]) {
+			if (state.get(start)) continue;
+			state.set(start, 1);
+			const stack = [{ node: start, edges: outgoing.get(start) ?? [], index: 0 }];
+
+			while (stack.length > 0) {
+				const frame = stack[stack.length - 1];
+				if (frame.index >= frame.edges.length) {
+					state.set(frame.node, 2);
+					stack.pop();
+					continue;
+				}
+				const next = frame.edges[frame.index++];
+				const visited = state.get(next.to) ?? 0;
+				if (visited === 1) {
+					back.add(next);
+				} else if (visited === 0) {
+					state.set(next.to, 1);
+					stack.push({ node: next.to, edges: outgoing.get(next.to) ?? [], index: 0 });
+				}
+			}
+		}
+	}
+
+	return back;
+}
+
+function assignLayers(paths: string[], edges: OrderingEdge[]): Map<string, number> {
+	const layer = new Map<string, number>(paths.map((path) => [path, 0]));
+	const outgoing = new Map<string, OrderingEdge[]>();
+	const inDegree = new Map<string, number>(paths.map((path) => [path, 0]));
+
+	for (const edge of edges) {
+		const list = outgoing.get(edge.source);
+		if (list) list.push(edge);
+		else outgoing.set(edge.source, [edge]);
+		inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+	}
+
+	const queue = paths.filter((path) => (inDegree.get(path) ?? 0) === 0);
+	let processed = 0;
+
+	while (queue.length > 0) {
+		const path = queue.shift() as string;
+		processed++;
+		for (const edge of outgoing.get(path) ?? []) {
+			const candidate = (layer.get(path) ?? 0) + 1;
+			if (candidate > (layer.get(edge.target) ?? 0)) layer.set(edge.target, candidate);
+			const remaining = (inDegree.get(edge.target) ?? 0) - 1;
+			inDegree.set(edge.target, remaining);
+			if (remaining === 0) queue.push(edge.target);
+		}
+	}
+
+	if (processed < paths.length) {
+		for (const edge of edges) {
+			const candidate = (layer.get(edge.source) ?? 0) + 1;
+			if (candidate > (layer.get(edge.target) ?? 0)) layer.set(edge.target, candidate);
+		}
+	}
+
+	return layer;
+}
+
+function groupComponents(paths: string[], relations: TaskRelation[]): Map<string, number> {
+	const parent = new Map<string, string>(paths.map((path) => [path, path]));
+
+	const find = (path: string): string => {
+		let root = path;
+		while (parent.get(root) !== root) root = parent.get(root) as string;
+		let cursor = path;
+		while (parent.get(cursor) !== root) {
+			const next = parent.get(cursor) as string;
+			parent.set(cursor, root);
+			cursor = next;
+		}
+		return root;
+	};
+
+	for (const relation of relations) {
+		const a = find(relation.from);
+		const b = find(relation.to);
+		if (a !== b) parent.set(a, b);
+	}
+
+	const ids = new Map<string, number>();
+	const components = new Map<string, number>();
+	for (const path of paths) {
+		const root = find(path);
+		let id = ids.get(root);
+		if (id === undefined) {
+			id = ids.size;
+			ids.set(root, id);
+		}
+		components.set(path, id);
+	}
+	return components;
+}
+
+function median(values: number[]): number | null {
+	if (values.length === 0) return null;
+	const sorted = [...values].sort((a, b) => a - b);
+	const middle = Math.floor(sorted.length / 2);
+	return sorted.length % 2 === 1
+		? sorted[middle]
+		: (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function orderLayers(layers: Cell[][], neighbours: Map<string, { previous: Cell[]; next: Cell[] }>): void {
+	const applyOrder = (layer: Cell[]) => {
+		layer.forEach((cell, index) => (cell.order = index));
+	};
+	layers.forEach(applyOrder);
+
+	for (let sweep = 0; sweep < 6; sweep++) {
+		const downwards = sweep % 2 === 0;
+		const indexes = downwards
+			? layers.map((_, index) => index).slice(1)
+			: layers.map((_, index) => index).slice(0, -1).reverse();
+
+		for (const index of indexes) {
+			const layer = layers[index];
+			const scores = new Map<string, number>();
+			for (const cell of layer) {
+				const links = neighbours.get(cell.key);
+				const side = downwards ? links?.previous : links?.next;
+				const barycentre = median((side ?? []).map((other) => other.order));
+				scores.set(cell.key, barycentre ?? cell.order);
+			}
+			layer.sort((a, b) => (scores.get(a.key) as number) - (scores.get(b.key) as number));
+			applyOrder(layer);
+		}
+	}
+}
+
+function assignRows(
+	layers: Cell[][],
+	neighbours: Map<string, { previous: Cell[]; next: Cell[] }>,
+	rowGap: number
+): void {
+	for (const layer of layers) {
+		let cursor = 0;
+		for (const cell of layer) {
+			cell.y = cursor;
+			cursor += cell.height + rowGap;
+		}
+	}
+
+	for (let sweep = 0; sweep < 4; sweep++) {
+		const downwards = sweep % 2 === 0;
+		const indexes = downwards
+			? layers.map((_, index) => index).slice(1)
+			: layers.map((_, index) => index).slice(0, -1).reverse();
+
+		for (const index of indexes) {
+			let cursor = Number.NEGATIVE_INFINITY;
+			for (const cell of layers[index]) {
+				const links = neighbours.get(cell.key);
+				const side = downwards ? links?.previous : links?.next;
+				const centre = median((side ?? []).map((other) => other.y + other.height / 2));
+				const desired = centre === null ? cell.y : centre - cell.height / 2;
+				cell.y = Math.max(cursor, desired);
+				cursor = cell.y + cell.height + rowGap;
+			}
+		}
+	}
+}
+
+function sideAnchor(node: LayoutNode, towards: LayoutNode): Point {
+	const horizontal = Math.abs(towards.x - node.x) >= node.width;
+	if (horizontal) {
+		return {
+			x: towards.x > node.x ? node.x + node.width : node.x,
+			y: node.y + node.height / 2,
+		};
+	}
+	return {
+		x: node.x + node.width / 2,
+		y: towards.y > node.y ? node.y + node.height : node.y,
+	};
+}
+
+export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_LAYOUT_OPTIONS): GraphLayout {
+	const records = new Map(graph.nodes.map((record) => [record.path, record]));
+	const relations = graph.relations.filter(
+		(relation) => records.has(relation.from) && records.has(relation.to)
+	);
+
+	const orderingRelations = relations.filter((relation) => isOrderingKind(relation.kind));
+	const backEdges = findBackEdges(orderingRelations);
+	const ordering: OrderingEdge[] = orderingRelations.map((relation) => {
+		const cyclic = backEdges.has(relation);
+		return {
+			relation,
+			source: cyclic ? relation.to : relation.from,
+			target: cyclic ? relation.from : relation.to,
+			cyclic,
+			dummies: [],
+		};
+	});
+
+	const paths = [...records.keys()];
+	const layerOf = assignLayers(paths, ordering);
+	const componentOf = groupComponents(paths, relations);
+
+	const degree = new Map<string, number>(paths.map((path) => [path, 0]));
+	for (const relation of relations) {
+		degree.set(relation.from, (degree.get(relation.from) ?? 0) + 1);
+		degree.set(relation.to, (degree.get(relation.to) ?? 0) + 1);
+	}
+
+	const linked = paths.filter((path) => (degree.get(path) ?? 0) > 0);
+	const unlinked = paths.filter((path) => (degree.get(path) ?? 0) === 0);
+
+	const cells = new Map<string, Cell>();
+	for (const path of linked) {
+		cells.set(path, {
+			key: path,
+			record: records.get(path) as TaskRecord,
+			layer: layerOf.get(path) ?? 0,
+			order: 0,
+			y: 0,
+			height: options.nodeHeight,
+		});
+	}
+
+	const components = new Map<number, string[]>();
+	for (const path of linked) {
+		const id = componentOf.get(path) as number;
+		const list = components.get(id);
+		if (list) list.push(path);
+		else components.set(id, [path]);
+	}
+
+	const step = options.nodeWidth + options.layerGap;
+	const layoutNodes: LayoutNode[] = [];
+	const layoutEdges: LayoutEdge[] = [];
+	let maxLayers = 0;
+	let top = 0;
+
+	const componentIds = [...components.keys()].sort((a, b) => {
+		const sizeDelta = (components.get(b) as string[]).length - (components.get(a) as string[]).length;
+		if (sizeDelta !== 0) return sizeDelta;
+		return a - b;
+	});
+
+	for (const id of componentIds) {
+		const members = components.get(id) as string[];
+		const memberSet = new Set(members);
+		const minLayer = Math.min(...members.map((path) => cells.get(path)?.layer ?? 0));
+		for (const path of members) {
+			const cell = cells.get(path) as Cell;
+			cell.layer -= minLayer;
+		}
+
+		const componentEdges = ordering.filter((edge) => memberSet.has(edge.source));
+		const layerCount = Math.max(...members.map((path) => (cells.get(path) as Cell).layer)) + 1;
+		const layers: Cell[][] = Array.from({ length: layerCount }, () => []);
+		for (const path of members) {
+			const cell = cells.get(path) as Cell;
+			layers[cell.layer].push(cell);
+		}
+
+		let dummyCount = 0;
+		for (const edge of componentEdges) {
+			const source = cells.get(edge.source) as Cell;
+			const target = cells.get(edge.target) as Cell;
+			for (let layer = source.layer + 1; layer < target.layer; layer++) {
+				const dummy: Cell = {
+					key: `${id}:dummy:${dummyCount++}`,
+					record: null,
+					layer,
+					order: 0,
+					y: 0,
+					height: options.dummyHeight,
+				};
+				edge.dummies.push(dummy);
+				layers[layer].push(dummy);
+			}
+		}
+
+		const neighbours = new Map<string, { previous: Cell[]; next: Cell[] }>();
+		const linkOf = (key: string) => {
+			let entry = neighbours.get(key);
+			if (!entry) {
+				entry = { previous: [], next: [] };
+				neighbours.set(key, entry);
+			}
+			return entry;
+		};
+		for (const edge of componentEdges) {
+			const chain = [
+				cells.get(edge.source) as Cell,
+				...edge.dummies,
+				cells.get(edge.target) as Cell,
+			];
+			for (let index = 0; index < chain.length - 1; index++) {
+				const from = chain[index];
+				const to = chain[index + 1];
+				linkOf(from.key).next.push(to);
+				linkOf(to.key).previous.push(from);
+			}
+		}
+
+		for (const layer of layers) {
+			layer.sort((a, b) => (a.record?.title ?? "").localeCompare(b.record?.title ?? ""));
+		}
+		orderLayers(layers, neighbours);
+		assignRows(layers, neighbours, options.rowGap);
+
+		const allCells = layers.flat();
+		const componentTop = Math.min(...allCells.map((cell) => cell.y));
+		const componentBottom = Math.max(...allCells.map((cell) => cell.y + cell.height));
+		for (const cell of allCells) {
+			cell.y += top - componentTop;
+		}
+
+		for (const path of members) {
+			const cell = cells.get(path) as Cell;
+			layoutNodes.push({
+				record: cell.record as TaskRecord,
+				x: cell.layer * step,
+				y: cell.y,
+				width: options.nodeWidth,
+				height: cell.height,
+				layer: cell.layer,
+				unlinked: false,
+			});
+		}
+
+		maxLayers = Math.max(maxLayers, layerCount);
+		top += componentBottom - componentTop + options.componentGap;
+	}
+
+	const nodeByPath = new Map(layoutNodes.map((node) => [node.record.path, node]));
+
+	for (const edge of ordering) {
+		const source = nodeByPath.get(edge.source);
+		const target = nodeByPath.get(edge.target);
+		if (!source || !target) continue;
+
+		const points: Point[] = [
+			{ x: source.x + source.width, y: source.y + source.height / 2 },
+			...edge.dummies.map((dummy) => ({
+				x: dummy.layer * step + options.nodeWidth / 2,
+				y: dummy.y + dummy.height / 2,
+			})),
+			{ x: target.x, y: target.y + target.height / 2 },
+		];
+
+		layoutEdges.push({
+			relation: edge.relation,
+			points: edge.cyclic ? [...points].reverse() : points,
+			cyclic: edge.cyclic,
+		});
+	}
+
+	for (const relation of relations) {
+		if (relation.kind !== "related") continue;
+		const from = nodeByPath.get(relation.from);
+		const to = nodeByPath.get(relation.to);
+		if (!from || !to) continue;
+		layoutEdges.push({
+			relation,
+			points: [sideAnchor(from, to), sideAnchor(to, from)],
+			cyclic: false,
+		});
+	}
+
+	let unlinkedTop: number | null = null;
+
+	if (unlinked.length > 0) {
+		if (layoutNodes.length > 0) top += options.componentGap;
+		unlinkedTop = top;
+		const columns = Math.max(4, maxLayers);
+		const sorted = [...unlinked].sort((a, b) =>
+			(records.get(a) as TaskRecord).title.localeCompare((records.get(b) as TaskRecord).title)
+		);
+		sorted.forEach((path, index) => {
+			const column = index % columns;
+			const row = Math.floor(index / columns);
+			layoutNodes.push({
+				record: records.get(path) as TaskRecord,
+				x: column * step,
+				y: top + row * (options.nodeHeight + options.rowGap),
+				width: options.nodeWidth,
+				height: options.nodeHeight,
+				layer: column,
+				unlinked: true,
+			});
+		});
+		top += Math.ceil(sorted.length / columns) * (options.nodeHeight + options.rowGap);
+	}
+
+	const width = layoutNodes.reduce((max, node) => Math.max(max, node.x + node.width), 0);
+	const height = layoutNodes.reduce((max, node) => Math.max(max, node.y + node.height), 0);
+
+	return { nodes: layoutNodes, edges: layoutEdges, width, height, unlinkedTop };
+}

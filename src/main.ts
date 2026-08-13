@@ -1,8 +1,10 @@
-import { Notice, Plugin } from "obsidian";
+import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS, SimpromanaSettingTab, SimpromanaSettings } from "./settings";
 import { CreateProjectModal } from "./modals/CreateProjectModal";
 import { CreateTaskModal } from "./modals/CreateTaskModal";
 import { setupBases } from "./lib/bases";
+import { activeProjectFile } from "./lib/vault";
+import { FLOW_VIEW_TYPE, FlowView, FlowViewState } from "./views/FlowView";
 
 export default class SimpromanaPlugin extends Plugin {
 	settings: SimpromanaSettings;
@@ -10,6 +12,17 @@ export default class SimpromanaPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.addSettingTab(new SimpromanaSettingTab(this.app, this));
+
+		this.registerView(
+			FLOW_VIEW_TYPE,
+			(leaf: WorkspaceLeaf) => new FlowView(leaf, this.settings)
+		);
+
+		this.addCommand({
+			id: "open-task-flow",
+			name: "Open task flow",
+			callback: () => this.openFlowView(),
+		});
 
 		this.addCommand({
 			id: "create-project",
@@ -36,6 +49,16 @@ export default class SimpromanaPlugin extends Plugin {
 				}
 			},
 		});
+	}
+
+	async openFlowView(): Promise<void> {
+		const { workspace } = this.app;
+		const leaf = workspace.getLeavesOfType(FLOW_VIEW_TYPE)[0] ?? workspace.getLeaf("tab");
+		const project = activeProjectFile(this.app, this.settings);
+		const state: FlowViewState = project ? { projectPath: project.path } : {};
+
+		await leaf.setViewState({ type: FLOW_VIEW_TYPE, active: true, state });
+		await workspace.revealLeaf(leaf);
 	}
 
 	async loadSettings(): Promise<void> {
