@@ -81,12 +81,33 @@
 	color: var(--text-warning);
 }
 
+.is-mobile .spm-flow-toolbar {
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.is-mobile .spm-flow-toolbar > * {
+	flex-shrink: 0;
+}
+
+.is-mobile .spm-flow-legend,
+.is-mobile .spm-flow-warning {
+	display: none;
+}
+
+.is-mobile .spm-flow-project {
+	max-width: 140px;
+}
+
 .spm-flow-canvas {
 	position: relative;
 	flex: 1;
 	min-height: 0;
 	overflow: hidden;
 	user-select: none;
+	touch-action: none;
+	overscroll-behavior: contain;
 }
 
 .spm-flow-svg {
@@ -189,7 +210,20 @@
 
 .spm-flow-node {
 	cursor: pointer;
-	transition: opacity 120ms ease-out;
+	transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 120ms ease-out;
+}
+
+.spm-flow-node.is-entering {
+	animation: spm-flow-enter 220ms ease-out;
+}
+
+@keyframes spm-flow-enter {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
 }
 
 .spm-flow-node.is-faded {
@@ -197,6 +231,10 @@
 }
 
 .spm-flow-card {
+	touch-action: none;
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
 	display: flex;
 	flex-direction: column;
 	justify-content: center;

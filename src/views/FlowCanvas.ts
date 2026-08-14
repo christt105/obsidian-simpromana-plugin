@@ -1,19 +1,21 @@
 import { setTooltip } from "obsidian";
-import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode, Point } from "../graph/layout";
+import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode } from "../graph/layout";
+import { CanvasGestures } from "./CanvasGestures";
+import type { Point, Transform } from "./CanvasGestures";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const MIN_SCALE = 0.15;
-const MAX_SCALE = 2.5;
-const DRAG_THRESHOLD = 4;
+const FIT_PADDING = 32;
 
-interface Transform {
+interface HitArea {
+	path: string;
 	x: number;
 	y: number;
-	k: number;
+	width: number;
+	height: number;
 }
 
 interface CanvasHandlers {
-	onOpenTask(path: string, event: MouseEvent): void;
+	onOpenTask(path: string, event: PointerEvent): void;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(
@@ -69,14 +71,15 @@ export class FlowCanvas {
 	private viewport: SVGGElement;
 	private edgeLayer: SVGGElement;
 	private nodeLayer: SVGGElement;
-	private transform: Transform = { x: 0, y: 0, k: 1 };
+	private gestures: CanvasGestures;
 	private layout: GraphLayout | null = null;
 	private nodeElements = new Map<string, SVGGElement>();
 	private edgeElements: { element: SVGPathElement; from: string; to: string }[] = [];
 	private neighbours = new Map<string, Set<string>>();
-	private dragging = false;
-	private dragMoved = 0;
-	private pointerOrigin: Point = { x: 0, y: 0 };
+	private hitAreas: HitArea[] = [];
+	private hovered: string | null = null;
+	private pendingFit = false;
+	private observer: ResizeObserver;
 
 	constructor(private container: HTMLElement, private handlers: CanvasHandlers) {
 		this.svg = svgEl("svg", { class: "spm-flow-svg" });
@@ -90,31 +93,34 @@ export class FlowCanvas {
 		this.svg.appendChild(this.viewport);
 		this.container.appendChild(this.svg);
 
-		this.svg.addEventListener("wheel", this.onWheel, { passive: false });
-		this.svg.addEventListener("pointerdown", this.onPointerDown);
-		this.svg.addEventListener("pointermove", this.onPointerMove);
-		this.svg.addEventListener("pointerup", this.onPointerUp);
-		this.svg.addEventListener("pointercancel", this.onPointerUp);
-		this.svg.addEventListener("pointerleave", this.clearHighlight);
+		this.gestures = new CanvasGestures(this.svg, {
+			onTransform: (transform) => this.applyTransform(transform),
+			onTap: (point, event) => this.onTap(point, event),
+			onHover: (point) => this.onHover(point),
+			onGesture: (active) => this.svg.toggleClass("is-panning", active),
+			onDoubleClick: (point) => this.onDoubleClick(point),
+		});
+
+		this.observer = new ResizeObserver(() => {
+			this.gestures.invalidateBounds();
+			if (this.pendingFit) this.fit(false);
+		});
+		this.observer.observe(this.container);
 	}
 
 	destroy(): void {
-		this.svg.removeEventListener("wheel", this.onWheel);
-		this.svg.removeEventListener("pointerdown", this.onPointerDown);
-		this.svg.removeEventListener("pointermove", this.onPointerMove);
-		this.svg.removeEventListener("pointerup", this.onPointerUp);
-		this.svg.removeEventListener("pointercancel", this.onPointerUp);
-		this.svg.removeEventListener("pointerleave", this.clearHighlight);
+		this.observer.disconnect();
+		this.gestures.destroy();
 		this.svg.remove();
 	}
 
 	render(layout: GraphLayout, options: { fit: boolean }): void {
 		this.layout = layout;
 		this.edgeLayer.empty();
-		this.nodeLayer.empty();
-		this.nodeElements.clear();
 		this.edgeElements = [];
 		this.neighbours.clear();
+		this.hitAreas = [];
+		this.hovered = null;
 
 		if (layout.unlinkedTop !== null) {
 			this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
@@ -122,40 +128,84 @@ export class FlowCanvas {
 		for (const group of layout.groups) {
 			this.edgeLayer.appendChild(this.buildGroupHeader(group));
 		}
-
 		for (const edge of layout.edges) {
 			this.edgeLayer.appendChild(this.buildEdge(edge));
 			this.link(edge.relation.from, edge.relation.to);
 		}
 
+		const previous = this.nodeElements;
+		this.nodeElements = new Map();
 		for (const node of layout.nodes) {
-			this.nodeLayer.appendChild(this.buildNode(node));
+			this.nodeElements.set(node.record.path, this.renderNode(node, previous));
+			this.hitAreas.push({
+				path: node.record.path,
+				x: node.x,
+				y: node.y,
+				width: node.width,
+				height: node.height,
+			});
 		}
+		for (const orphan of previous.values()) orphan.remove();
 
-		if (options.fit) this.fit();
-		else this.applyTransform();
+		if (options.fit) this.fit(false);
 	}
 
-	fit(): void {
+	fit(animate = true): void {
 		const layout = this.layout;
 		if (!layout || layout.nodes.length === 0) return;
 
 		const bounds = this.container.getBoundingClientRect();
-		const padding = 32;
-		const scale = Math.min(
-			(bounds.width - padding * 2) / Math.max(layout.width, 1),
-			(bounds.height - padding * 2) / Math.max(layout.height, 1),
-			1
-		);
-		this.transform.k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
-		this.transform.x = (bounds.width - layout.width * this.transform.k) / 2;
-		this.transform.y = (bounds.height - layout.height * this.transform.k) / 2;
-		this.applyTransform();
+		if (bounds.width < 50 || bounds.height < 50) {
+			this.pendingFit = true;
+			return;
+		}
+
+		this.pendingFit = false;
+		this.gestures.fit(layout.width, layout.height, FIT_PADDING, animate);
 	}
 
 	zoomBy(factor: number): void {
-		const bounds = this.container.getBoundingClientRect();
-		this.zoomAt(factor, bounds.width / 2, bounds.height / 2);
+		this.gestures.zoomBy(factor);
+	}
+
+	private applyTransform(transform: Transform): void {
+		this.viewport.setAttribute(
+			"transform",
+			`translate(${transform.x} ${transform.y}) scale(${transform.k})`
+		);
+	}
+
+	private hitTest(point: Point): string | null {
+		for (let index = this.hitAreas.length - 1; index >= 0; index--) {
+			const area = this.hitAreas[index];
+			if (
+				point.x >= area.x &&
+				point.x <= area.x + area.width &&
+				point.y >= area.y &&
+				point.y <= area.y + area.height
+			) {
+				return area.path;
+			}
+		}
+		return null;
+	}
+
+	private onTap(point: Point, event: PointerEvent): void {
+		const path = this.hitTest(point);
+		if (path) this.handlers.onOpenTask(path, event);
+	}
+
+	private onHover(point: Point | null): void {
+		const path = point ? this.hitTest(point) : null;
+		if (path === this.hovered) return;
+		this.hovered = path;
+		if (path) this.highlight(path);
+		else this.clearHighlight();
+	}
+
+	private onDoubleClick(point: Point): void {
+		if (this.hitTest(point)) return;
+		this.gestures.zoomBy(1.6);
 	}
 
 	private buildDefs(): SVGDefsElement {
@@ -224,14 +274,19 @@ export class FlowCanvas {
 		return path;
 	}
 
-	private buildNode(node: LayoutNode): SVGGElement {
+	private renderNode(node: LayoutNode, previous: Map<string, SVGGElement>): SVGGElement {
 		const record = node.record;
-		const group = svgEl("g", { class: "spm-flow-node" });
-		group.dataset.path = record.path;
+		const existing = previous.get(record.path);
+		previous.delete(record.path);
+
+		const group = existing ?? svgEl("g", { class: "spm-flow-node is-entering" });
+		group.empty();
+		if (!existing) this.nodeLayer.appendChild(group);
+		group.setAttribute("transform", `translate(${node.x} ${node.y})`);
 
 		const holder = svgEl("foreignObject", {
-			x: String(node.x),
-			y: String(node.y),
+			x: "0",
+			y: "0",
 			width: String(node.width),
 			height: String(node.height),
 		});
@@ -264,20 +319,8 @@ export class FlowCanvas {
 
 		holder.appendChild(card);
 		group.appendChild(holder);
-
 		setTooltip(card, this.tooltipFor(node), { delay: 400 });
 
-		group.addEventListener("mouseenter", () => this.highlight(record.path));
-		group.addEventListener("mouseleave", this.clearHighlight);
-		group.addEventListener("click", (event: MouseEvent) => {
-			if (this.dragMoved > DRAG_THRESHOLD) return;
-			this.handlers.onOpenTask(record.path, event);
-		});
-		group.addEventListener("auxclick", (event: MouseEvent) => {
-			if (event.button === 1) this.handlers.onOpenTask(record.path, event);
-		});
-
-		this.nodeElements.set(record.path, group);
 		return group;
 	}
 
@@ -289,10 +332,6 @@ export class FlowCanvas {
 		if (record.priority) lines.push(`Priority: ${record.priority}`);
 		if (record.milestone) lines.push(`Milestone: ${record.milestone}`);
 		if (record.projectName) lines.push(`Project: ${record.projectName}`);
-		const incoming = this.layout?.edges.filter((edge) => edge.relation.to === record.path) ?? [];
-		for (const edge of incoming) {
-			if (edge.relation.kind === "dependency") lines.push("Blocked by an upstream task");
-		}
 		return lines.join("\n");
 	}
 
@@ -306,79 +345,28 @@ export class FlowCanvas {
 	}
 
 	private highlight(path: string): void {
-		if (this.dragging) return;
 		const related = this.neighbours.get(path) ?? new Set<string>();
 
 		for (const [nodePath, element] of this.nodeElements) {
 			const active = nodePath === path || related.has(nodePath);
-			element.classList.toggle("is-faded", !active);
-			element.classList.toggle("is-focus", nodePath === path);
+			element.toggleClass("is-faded", !active);
+			element.toggleClass("is-focus", nodePath === path);
 		}
 		for (const edge of this.edgeElements) {
 			const active = edge.from === path || edge.to === path;
-			edge.element.classList.toggle("is-faded", !active);
-			edge.element.classList.toggle("is-active", active);
+			edge.element.toggleClass("is-faded", !active);
+			edge.element.toggleClass("is-active", active);
 		}
 	}
 
-	private clearHighlight = (): void => {
+	private clearHighlight(): void {
 		for (const element of this.nodeElements.values()) {
-			element.classList.remove("is-faded", "is-focus");
+			element.removeClass("is-faded");
+			element.removeClass("is-focus");
 		}
 		for (const edge of this.edgeElements) {
-			edge.element.classList.remove("is-faded", "is-active");
+			edge.element.removeClass("is-faded");
+			edge.element.removeClass("is-active");
 		}
-	};
-
-	private applyTransform(): void {
-		const { x, y, k } = this.transform;
-		this.viewport.setAttribute("transform", `translate(${x} ${y}) scale(${k})`);
 	}
-
-	private zoomAt(factor: number, clientX: number, clientY: number): void {
-		const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.transform.k * factor));
-		const ratio = next / this.transform.k;
-		this.transform.x = clientX - (clientX - this.transform.x) * ratio;
-		this.transform.y = clientY - (clientY - this.transform.y) * ratio;
-		this.transform.k = next;
-		this.applyTransform();
-	}
-
-	private onWheel = (event: WheelEvent): void => {
-		event.preventDefault();
-		const bounds = this.container.getBoundingClientRect();
-		this.zoomAt(
-			Math.pow(0.999, event.deltaY),
-			event.clientX - bounds.left,
-			event.clientY - bounds.top
-		);
-	};
-
-	private onPointerDown = (event: PointerEvent): void => {
-		if (event.button !== 0) return;
-		this.dragging = true;
-		this.dragMoved = 0;
-		this.pointerOrigin = { x: event.clientX, y: event.clientY };
-		this.svg.setPointerCapture(event.pointerId);
-		this.svg.addClass("is-panning");
-	};
-
-	private onPointerMove = (event: PointerEvent): void => {
-		if (!this.dragging) return;
-		const dx = event.clientX - this.pointerOrigin.x;
-		const dy = event.clientY - this.pointerOrigin.y;
-		this.dragMoved += Math.abs(dx) + Math.abs(dy);
-		this.transform.x += dx;
-		this.transform.y += dy;
-		this.pointerOrigin = { x: event.clientX, y: event.clientY };
-		this.applyTransform();
-	};
-
-	private onPointerUp = (event: PointerEvent): void => {
-		if (!this.dragging) return;
-		this.dragging = false;
-		this.svg.releasePointerCapture(event.pointerId);
-		this.svg.removeClass("is-panning");
-		window.setTimeout(() => (this.dragMoved = 0), 0);
-	};
 }

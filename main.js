@@ -1180,10 +1180,289 @@ function projectFiles(app, settings) {
 
 // src/views/FlowCanvas.ts
 var import_obsidian6 = require("obsidian");
+
+// src/views/CanvasGestures.ts
+var MIN_SCALE = 0.05;
+var MAX_SCALE = 3;
+var TAP_MOVEMENT = 10;
+var TAP_DURATION = 600;
+var FRICTION = 0.93;
+var MIN_VELOCITY = 0.03;
+var RECT_TTL = 250;
+var ANIMATION_MS = 260;
+function distance(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+function midpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+var CanvasGestures = class {
+  constructor(element, handlers) {
+    this.element = element;
+    this.handlers = handlers;
+    this.transform = { x: 0, y: 0, k: 1 };
+    this.pointers = /* @__PURE__ */ new Map();
+    this.mode = "none";
+    this.pinchDistance = 0;
+    this.pinchCentre = { x: 0, y: 0 };
+    this.velocity = { x: 0, y: 0 };
+    this.lastMove = 0;
+    this.moved = 0;
+    this.tapStart = 0;
+    this.inertiaFrame = 0;
+    this.animationFrame = 0;
+    this.renderFrame = 0;
+    this.rect = null;
+    this.rectTime = 0;
+    this.onPointerDown = (event) => {
+      if (event.button !== 0 && event.button !== 1)
+        return;
+      this.stopMotion();
+      this.element.setPointerCapture(event.pointerId);
+      this.pointers.set(event.pointerId, this.local(event));
+      if (this.pointers.size === 1) {
+        this.mode = "pan";
+        this.moved = 0;
+        this.tapStart = performance.now();
+        this.lastMove = this.tapStart;
+        this.velocity = { x: 0, y: 0 };
+        this.handlers.onGesture(true);
+      } else if (this.pointers.size === 2) {
+        const [a, b] = [...this.pointers.values()];
+        this.mode = "pinch";
+        this.pinchDistance = distance(a, b);
+        this.pinchCentre = midpoint(a, b);
+        this.velocity = { x: 0, y: 0 };
+      }
+    };
+    this.onPointerMove = (event) => {
+      const previous = this.pointers.get(event.pointerId);
+      const point = this.local(event);
+      if (!previous) {
+        if (this.mode === "none" && event.pointerType === "mouse") {
+          this.handlers.onHover(this.toGraph(point));
+        }
+        return;
+      }
+      this.pointers.set(event.pointerId, point);
+      if (this.mode === "pan") {
+        const dx = point.x - previous.x;
+        const dy = point.y - previous.y;
+        const now = performance.now();
+        const elapsed = Math.max(1, now - this.lastMove);
+        this.lastMove = now;
+        this.moved += Math.abs(dx) + Math.abs(dy);
+        this.velocity = {
+          x: this.velocity.x * 0.3 + dx / elapsed * 0.7,
+          y: this.velocity.y * 0.3 + dy / elapsed * 0.7
+        };
+        this.transform.x += dx;
+        this.transform.y += dy;
+        this.schedule();
+        return;
+      }
+      if (this.mode === "pinch" && this.pointers.size >= 2) {
+        const [a, b] = [...this.pointers.values()];
+        const spread = distance(a, b);
+        const centre = midpoint(a, b);
+        if (this.pinchDistance > 0) {
+          this.transform = this.scaled(spread / this.pinchDistance, this.pinchCentre);
+        }
+        this.transform.x += centre.x - this.pinchCentre.x;
+        this.transform.y += centre.y - this.pinchCentre.y;
+        this.pinchDistance = spread;
+        this.pinchCentre = centre;
+        this.schedule();
+      }
+    };
+    this.onPointerUp = (event) => {
+      if (!this.pointers.has(event.pointerId))
+        return;
+      const point = this.local(event);
+      this.pointers.delete(event.pointerId);
+      if (this.element.hasPointerCapture(event.pointerId)) {
+        this.element.releasePointerCapture(event.pointerId);
+      }
+      if (this.pointers.size === 1) {
+        const remaining = [...this.pointers.values()][0];
+        this.mode = "pan";
+        this.moved = TAP_MOVEMENT + 1;
+        this.lastMove = performance.now();
+        this.velocity = { x: 0, y: 0 };
+        this.pinchCentre = remaining;
+        return;
+      }
+      if (this.pointers.size > 0)
+        return;
+      const wasTap = this.mode === "pan" && this.moved <= TAP_MOVEMENT && performance.now() - this.tapStart <= TAP_DURATION;
+      this.mode = "none";
+      this.handlers.onGesture(false);
+      if (wasTap)
+        this.handlers.onTap(this.toGraph(point), event);
+      else
+        this.startInertia();
+    };
+    this.onPointerLeave = (event) => {
+      if (this.pointers.size === 0 && event.pointerType === "mouse") {
+        this.handlers.onHover(null);
+      }
+    };
+    this.onWheel = (event) => {
+      event.preventDefault();
+      this.stopMotion();
+      this.transform = this.scaled(Math.pow(0.999, event.deltaY), this.local(event));
+      this.schedule();
+    };
+    this.onDoubleClick = (event) => {
+      event.preventDefault();
+      this.handlers.onDoubleClick(this.toGraph(this.local(event)));
+    };
+    this.onTouchStart = (event) => {
+      event.stopPropagation();
+    };
+    this.onTouchMove = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    element.addEventListener("wheel", this.onWheel, { passive: false });
+    element.addEventListener("pointerdown", this.onPointerDown);
+    element.addEventListener("pointermove", this.onPointerMove);
+    element.addEventListener("pointerup", this.onPointerUp);
+    element.addEventListener("pointercancel", this.onPointerUp);
+    element.addEventListener("pointerleave", this.onPointerLeave);
+    element.addEventListener("dblclick", this.onDoubleClick);
+    element.addEventListener("touchstart", this.onTouchStart, { passive: false });
+    element.addEventListener("touchmove", this.onTouchMove, { passive: false });
+  }
+  destroy() {
+    this.stopMotion();
+    if (this.renderFrame)
+      cancelAnimationFrame(this.renderFrame);
+    this.element.removeEventListener("wheel", this.onWheel);
+    this.element.removeEventListener("pointerdown", this.onPointerDown);
+    this.element.removeEventListener("pointermove", this.onPointerMove);
+    this.element.removeEventListener("pointerup", this.onPointerUp);
+    this.element.removeEventListener("pointercancel", this.onPointerUp);
+    this.element.removeEventListener("pointerleave", this.onPointerLeave);
+    this.element.removeEventListener("dblclick", this.onDoubleClick);
+    this.element.removeEventListener("touchstart", this.onTouchStart);
+    this.element.removeEventListener("touchmove", this.onTouchMove);
+  }
+  invalidateBounds() {
+    this.rect = null;
+  }
+  get bounds() {
+    const now = performance.now();
+    if (!this.rect || now - this.rectTime > RECT_TTL) {
+      this.rect = this.element.getBoundingClientRect();
+      this.rectTime = now;
+    }
+    return this.rect;
+  }
+  toGraph(point) {
+    return {
+      x: (point.x - this.transform.x) / this.transform.k,
+      y: (point.y - this.transform.y) / this.transform.k
+    };
+  }
+  moveTo(target, animate) {
+    this.stopMotion();
+    if (!animate) {
+      this.transform = { ...target };
+      this.schedule();
+      return;
+    }
+    const from = { ...this.transform };
+    const start = performance.now();
+    const step = () => {
+      const progress = Math.min(1, (performance.now() - start) / ANIMATION_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      this.transform = {
+        x: from.x + (target.x - from.x) * eased,
+        y: from.y + (target.y - from.y) * eased,
+        k: from.k + (target.k - from.k) * eased
+      };
+      this.apply();
+      this.animationFrame = progress < 1 ? requestAnimationFrame(step) : 0;
+    };
+    this.animationFrame = requestAnimationFrame(step);
+  }
+  zoomBy(factor, animate = true) {
+    const bounds = this.bounds;
+    const anchor = { x: bounds.width / 2, y: bounds.height / 2 };
+    this.moveTo(this.scaled(factor, anchor), animate);
+  }
+  fit(width, height, padding, animate) {
+    const bounds = this.bounds;
+    const scale = Math.min(
+      (bounds.width - padding * 2) / Math.max(width, 1),
+      (bounds.height - padding * 2) / Math.max(height, 1),
+      1
+    );
+    const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+    this.moveTo(
+      {
+        k,
+        x: (bounds.width - width * k) / 2,
+        y: (bounds.height - height * k) / 2
+      },
+      animate
+    );
+  }
+  scaled(factor, anchor) {
+    const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.transform.k * factor));
+    const ratio = k / this.transform.k;
+    return {
+      k,
+      x: anchor.x - (anchor.x - this.transform.x) * ratio,
+      y: anchor.y - (anchor.y - this.transform.y) * ratio
+    };
+  }
+  local(event) {
+    const bounds = this.bounds;
+    return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+  }
+  apply() {
+    this.handlers.onTransform(this.transform);
+  }
+  schedule() {
+    if (this.renderFrame)
+      return;
+    this.renderFrame = requestAnimationFrame(() => {
+      this.renderFrame = 0;
+      this.apply();
+    });
+  }
+  stopMotion() {
+    if (this.inertiaFrame)
+      cancelAnimationFrame(this.inertiaFrame);
+    if (this.animationFrame)
+      cancelAnimationFrame(this.animationFrame);
+    this.inertiaFrame = 0;
+    this.animationFrame = 0;
+  }
+  startInertia() {
+    if (Math.hypot(this.velocity.x, this.velocity.y) < MIN_VELOCITY)
+      return;
+    let previous = performance.now();
+    const step = () => {
+      const now = performance.now();
+      const elapsed = Math.min(32, now - previous);
+      previous = now;
+      this.transform.x += this.velocity.x * elapsed;
+      this.transform.y += this.velocity.y * elapsed;
+      this.velocity.x *= Math.pow(FRICTION, elapsed / 16);
+      this.velocity.y *= Math.pow(FRICTION, elapsed / 16);
+      this.apply();
+      this.inertiaFrame = Math.hypot(this.velocity.x, this.velocity.y) > MIN_VELOCITY ? requestAnimationFrame(step) : 0;
+    };
+    this.inertiaFrame = requestAnimationFrame(step);
+  }
+};
+
+// src/views/FlowCanvas.ts
 var SVG_NS = "http://www.w3.org/2000/svg";
-var MIN_SCALE = 0.15;
-var MAX_SCALE = 2.5;
-var DRAG_THRESHOLD = 4;
+var FIT_PADDING = 32;
 function svgEl(tag, attributes = {}) {
   const element = document.createElementNS(SVG_NS, tag);
   for (const [name, value] of Object.entries(attributes)) {
@@ -1229,59 +1508,13 @@ var FlowCanvas = class {
   constructor(container, handlers) {
     this.container = container;
     this.handlers = handlers;
-    this.transform = { x: 0, y: 0, k: 1 };
     this.layout = null;
     this.nodeElements = /* @__PURE__ */ new Map();
     this.edgeElements = [];
     this.neighbours = /* @__PURE__ */ new Map();
-    this.dragging = false;
-    this.dragMoved = 0;
-    this.pointerOrigin = { x: 0, y: 0 };
-    this.clearHighlight = () => {
-      for (const element of this.nodeElements.values()) {
-        element.classList.remove("is-faded", "is-focus");
-      }
-      for (const edge of this.edgeElements) {
-        edge.element.classList.remove("is-faded", "is-active");
-      }
-    };
-    this.onWheel = (event) => {
-      event.preventDefault();
-      const bounds = this.container.getBoundingClientRect();
-      this.zoomAt(
-        Math.pow(0.999, event.deltaY),
-        event.clientX - bounds.left,
-        event.clientY - bounds.top
-      );
-    };
-    this.onPointerDown = (event) => {
-      if (event.button !== 0)
-        return;
-      this.dragging = true;
-      this.dragMoved = 0;
-      this.pointerOrigin = { x: event.clientX, y: event.clientY };
-      this.svg.setPointerCapture(event.pointerId);
-      this.svg.addClass("is-panning");
-    };
-    this.onPointerMove = (event) => {
-      if (!this.dragging)
-        return;
-      const dx = event.clientX - this.pointerOrigin.x;
-      const dy = event.clientY - this.pointerOrigin.y;
-      this.dragMoved += Math.abs(dx) + Math.abs(dy);
-      this.transform.x += dx;
-      this.transform.y += dy;
-      this.pointerOrigin = { x: event.clientX, y: event.clientY };
-      this.applyTransform();
-    };
-    this.onPointerUp = (event) => {
-      if (!this.dragging)
-        return;
-      this.dragging = false;
-      this.svg.releasePointerCapture(event.pointerId);
-      this.svg.removeClass("is-panning");
-      window.setTimeout(() => this.dragMoved = 0, 0);
-    };
+    this.hitAreas = [];
+    this.hovered = null;
+    this.pendingFit = false;
     this.svg = svgEl("svg", { class: "spm-flow-svg" });
     this.svg.appendChild(this.buildDefs());
     this.viewport = svgEl("g", { class: "spm-flow-viewport" });
@@ -1291,29 +1524,32 @@ var FlowCanvas = class {
     this.viewport.appendChild(this.nodeLayer);
     this.svg.appendChild(this.viewport);
     this.container.appendChild(this.svg);
-    this.svg.addEventListener("wheel", this.onWheel, { passive: false });
-    this.svg.addEventListener("pointerdown", this.onPointerDown);
-    this.svg.addEventListener("pointermove", this.onPointerMove);
-    this.svg.addEventListener("pointerup", this.onPointerUp);
-    this.svg.addEventListener("pointercancel", this.onPointerUp);
-    this.svg.addEventListener("pointerleave", this.clearHighlight);
+    this.gestures = new CanvasGestures(this.svg, {
+      onTransform: (transform) => this.applyTransform(transform),
+      onTap: (point, event) => this.onTap(point, event),
+      onHover: (point) => this.onHover(point),
+      onGesture: (active) => this.svg.toggleClass("is-panning", active),
+      onDoubleClick: (point) => this.onDoubleClick(point)
+    });
+    this.observer = new ResizeObserver(() => {
+      this.gestures.invalidateBounds();
+      if (this.pendingFit)
+        this.fit(false);
+    });
+    this.observer.observe(this.container);
   }
   destroy() {
-    this.svg.removeEventListener("wheel", this.onWheel);
-    this.svg.removeEventListener("pointerdown", this.onPointerDown);
-    this.svg.removeEventListener("pointermove", this.onPointerMove);
-    this.svg.removeEventListener("pointerup", this.onPointerUp);
-    this.svg.removeEventListener("pointercancel", this.onPointerUp);
-    this.svg.removeEventListener("pointerleave", this.clearHighlight);
+    this.observer.disconnect();
+    this.gestures.destroy();
     this.svg.remove();
   }
   render(layout, options) {
     this.layout = layout;
     this.edgeLayer.empty();
-    this.nodeLayer.empty();
-    this.nodeElements.clear();
     this.edgeElements = [];
     this.neighbours.clear();
+    this.hitAreas = [];
+    this.hovered = null;
     if (layout.unlinkedTop !== null) {
       this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
     }
@@ -1324,33 +1560,72 @@ var FlowCanvas = class {
       this.edgeLayer.appendChild(this.buildEdge(edge));
       this.link(edge.relation.from, edge.relation.to);
     }
+    const previous = this.nodeElements;
+    this.nodeElements = /* @__PURE__ */ new Map();
     for (const node of layout.nodes) {
-      this.nodeLayer.appendChild(this.buildNode(node));
+      this.nodeElements.set(node.record.path, this.renderNode(node, previous));
+      this.hitAreas.push({
+        path: node.record.path,
+        x: node.x,
+        y: node.y,
+        width: node.width,
+        height: node.height
+      });
     }
+    for (const orphan of previous.values())
+      orphan.remove();
     if (options.fit)
-      this.fit();
-    else
-      this.applyTransform();
+      this.fit(false);
   }
-  fit() {
+  fit(animate = true) {
     const layout = this.layout;
     if (!layout || layout.nodes.length === 0)
       return;
     const bounds = this.container.getBoundingClientRect();
-    const padding = 32;
-    const scale = Math.min(
-      (bounds.width - padding * 2) / Math.max(layout.width, 1),
-      (bounds.height - padding * 2) / Math.max(layout.height, 1),
-      1
-    );
-    this.transform.k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
-    this.transform.x = (bounds.width - layout.width * this.transform.k) / 2;
-    this.transform.y = (bounds.height - layout.height * this.transform.k) / 2;
-    this.applyTransform();
+    if (bounds.width < 50 || bounds.height < 50) {
+      this.pendingFit = true;
+      return;
+    }
+    this.pendingFit = false;
+    this.gestures.fit(layout.width, layout.height, FIT_PADDING, animate);
   }
   zoomBy(factor) {
-    const bounds = this.container.getBoundingClientRect();
-    this.zoomAt(factor, bounds.width / 2, bounds.height / 2);
+    this.gestures.zoomBy(factor);
+  }
+  applyTransform(transform) {
+    this.viewport.setAttribute(
+      "transform",
+      `translate(${transform.x} ${transform.y}) scale(${transform.k})`
+    );
+  }
+  hitTest(point) {
+    for (let index = this.hitAreas.length - 1; index >= 0; index--) {
+      const area = this.hitAreas[index];
+      if (point.x >= area.x && point.x <= area.x + area.width && point.y >= area.y && point.y <= area.y + area.height) {
+        return area.path;
+      }
+    }
+    return null;
+  }
+  onTap(point, event) {
+    const path = this.hitTest(point);
+    if (path)
+      this.handlers.onOpenTask(path, event);
+  }
+  onHover(point) {
+    const path = point ? this.hitTest(point) : null;
+    if (path === this.hovered)
+      return;
+    this.hovered = path;
+    if (path)
+      this.highlight(path);
+    else
+      this.clearHighlight();
+  }
+  onDoubleClick(point) {
+    if (this.hitTest(point))
+      return;
+    this.gestures.zoomBy(1.6);
   }
   buildDefs() {
     const defs = svgEl("defs");
@@ -1414,13 +1689,18 @@ var FlowCanvas = class {
     this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
     return path;
   }
-  buildNode(node) {
+  renderNode(node, previous) {
     const record = node.record;
-    const group = svgEl("g", { class: "spm-flow-node" });
-    group.dataset.path = record.path;
+    const existing = previous.get(record.path);
+    previous.delete(record.path);
+    const group = existing != null ? existing : svgEl("g", { class: "spm-flow-node is-entering" });
+    group.empty();
+    if (!existing)
+      this.nodeLayer.appendChild(group);
+    group.setAttribute("transform", `translate(${node.x} ${node.y})`);
     const holder = svgEl("foreignObject", {
-      x: String(node.x),
-      y: String(node.y),
+      x: "0",
+      y: "0",
       width: String(node.width),
       height: String(node.height)
     });
@@ -1452,22 +1732,9 @@ var FlowCanvas = class {
     holder.appendChild(card);
     group.appendChild(holder);
     (0, import_obsidian6.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
-    group.addEventListener("mouseenter", () => this.highlight(record.path));
-    group.addEventListener("mouseleave", this.clearHighlight);
-    group.addEventListener("click", (event) => {
-      if (this.dragMoved > DRAG_THRESHOLD)
-        return;
-      this.handlers.onOpenTask(record.path, event);
-    });
-    group.addEventListener("auxclick", (event) => {
-      if (event.button === 1)
-        this.handlers.onOpenTask(record.path, event);
-    });
-    this.nodeElements.set(record.path, group);
     return group;
   }
   tooltipFor(node) {
-    var _a, _b;
     const record = node.record;
     const lines = [record.title];
     if (record.kind === "reference")
@@ -1480,11 +1747,6 @@ var FlowCanvas = class {
       lines.push(`Milestone: ${record.milestone}`);
     if (record.projectName)
       lines.push(`Project: ${record.projectName}`);
-    const incoming = (_b = (_a = this.layout) == null ? void 0 : _a.edges.filter((edge) => edge.relation.to === record.path)) != null ? _b : [];
-    for (const edge of incoming) {
-      if (edge.relation.kind === "dependency")
-        lines.push("Blocked by an upstream task");
-    }
     return lines.join("\n");
   }
   link(from, to) {
@@ -1498,31 +1760,27 @@ var FlowCanvas = class {
   }
   highlight(path) {
     var _a;
-    if (this.dragging)
-      return;
     const related = (_a = this.neighbours.get(path)) != null ? _a : /* @__PURE__ */ new Set();
     for (const [nodePath, element] of this.nodeElements) {
       const active = nodePath === path || related.has(nodePath);
-      element.classList.toggle("is-faded", !active);
-      element.classList.toggle("is-focus", nodePath === path);
+      element.toggleClass("is-faded", !active);
+      element.toggleClass("is-focus", nodePath === path);
     }
     for (const edge of this.edgeElements) {
       const active = edge.from === path || edge.to === path;
-      edge.element.classList.toggle("is-faded", !active);
-      edge.element.classList.toggle("is-active", active);
+      edge.element.toggleClass("is-faded", !active);
+      edge.element.toggleClass("is-active", active);
     }
   }
-  applyTransform() {
-    const { x, y, k } = this.transform;
-    this.viewport.setAttribute("transform", `translate(${x} ${y}) scale(${k})`);
-  }
-  zoomAt(factor, clientX, clientY) {
-    const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, this.transform.k * factor));
-    const ratio = next / this.transform.k;
-    this.transform.x = clientX - (clientX - this.transform.x) * ratio;
-    this.transform.y = clientY - (clientY - this.transform.y) * ratio;
-    this.transform.k = next;
-    this.applyTransform();
+  clearHighlight() {
+    for (const element of this.nodeElements.values()) {
+      element.removeClass("is-faded");
+      element.removeClass("is-focus");
+    }
+    for (const edge of this.edgeElements) {
+      edge.element.removeClass("is-faded");
+      edge.element.removeClass("is-active");
+    }
   }
 };
 
