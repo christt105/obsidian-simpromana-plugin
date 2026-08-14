@@ -1,6 +1,9 @@
-export type RelationKind = "dependency" | "continuation" | "related";
+export type RelationKind = "dependency" | "continuation" | "related" | "mention";
 
-export interface TaskRecord {
+export type NoteKind = "task" | "reference";
+
+export interface NoteRecord {
+	kind: NoteKind;
 	path: string;
 	basename: string;
 	title: string;
@@ -11,9 +14,12 @@ export interface TaskRecord {
 	priority: string;
 	milestone: string | null;
 	frontmatter: Record<string, unknown>;
+	links: string[];
+	/** Outside the selected project, pulled in by a relation. */
+	external?: boolean;
 }
 
-export interface TaskRelation {
+export interface NoteRelation {
 	from: string;
 	to: string;
 	kind: RelationKind;
@@ -25,13 +31,13 @@ export interface UnresolvedRelation {
 	target: string;
 }
 
-export interface TaskGraph {
-	nodes: TaskRecord[];
-	relations: TaskRelation[];
+export interface NoteGraph {
+	nodes: NoteRecord[];
+	relations: NoteRelation[];
 	unresolved: UnresolvedRelation[];
 }
 
-export const ORDERING_KINDS: RelationKind[] = ["dependency", "continuation"];
+const ORDERING_KINDS: RelationKind[] = ["dependency", "continuation"];
 
 export function isOrderingKind(kind: RelationKind): boolean {
 	return ORDERING_KINDS.includes(kind);

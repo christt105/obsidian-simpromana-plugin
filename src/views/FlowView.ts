@@ -8,12 +8,14 @@ import {
 	setIcon,
 } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
-import type { RelationKind, TaskRecord } from "../graph/model";
-import { buildTaskGraph, connectedPaths, dropNodes, selectSubgraph } from "../graph/build";
-import { layoutGraph } from "../graph/layout";
+import type { NoteRecord, RelationKind } from "../graph/model";
+import { buildNoteGraph, connectedPaths, dropNodes, selectSubgraph } from "../graph/build";
+import { DEFAULT_LAYOUT_OPTIONS, layoutGraph } from "../graph/layout";
+import { GROUPING_LABELS } from "../graph/grouping";
+import type { GroupingMode } from "../graph/grouping";
 import { RELATION_LABELS } from "../graph/relations";
-import { collectTaskRecords, createTaskResolver, projectFiles } from "../lib/tasks";
-import { projectsPath, tasksPath } from "../lib/vault";
+import { collectNotes, createNoteResolver, projectFiles } from "../lib/notes";
+import { projectsPath, referencesPath, tasksPath } from "../lib/vault";
 import { FlowCanvas } from "./FlowCanvas";
 
 export const FLOW_VIEW_TYPE = "simpromana-flow";
@@ -22,21 +24,28 @@ const LEGEND: { kind: RelationKind; label: string }[] = [
 	{ kind: "dependency", label: RELATION_LABELS.dependency },
 	{ kind: "continuation", label: RELATION_LABELS.continuation },
 	{ kind: "related", label: RELATION_LABELS.related },
+	{ kind: "mention", label: RELATION_LABELS.mention },
 ];
 
 export interface FlowViewState extends Record<string, unknown> {
 	projectPath?: string;
 	hideDone?: boolean;
 	showUnlinked?: boolean;
+	mentions?: boolean;
+	references?: boolean;
+	grouping?: GroupingMode;
 }
 
 export class FlowView extends ItemView {
 	private projectPath: string | null = null;
 	private hideDone = false;
 	private showUnlinked = false;
+	private mentions = true;
+	private references = false;
+	private grouping: GroupingMode = "status";
 	private projectSelect: HTMLSelectElement;
-	private unlinkedButton: HTMLButtonElement;
-	private doneButton: HTMLButtonElement;
+	private groupingSelect: HTMLSelectElement;
+	private toggles = new Map<string, HTMLButtonElement>();
 	private warningEl: HTMLElement;
 	private canvasEl: HTMLElement;
 	private emptyEl: HTMLElement;
@@ -100,6 +109,9 @@ export class FlowView extends ItemView {
 			projectPath: this.projectPath ?? undefined,
 			hideDone: this.hideDone,
 			showUnlinked: this.showUnlinked,
+			mentions: this.mentions,
+			references: this.references,
+			grouping: this.grouping,
 		};
 	}
 
@@ -108,6 +120,9 @@ export class FlowView extends ItemView {
 		if (typeof next.projectPath === "string") this.projectPath = next.projectPath;
 		if (typeof next.hideDone === "boolean") this.hideDone = next.hideDone;
 		if (typeof next.showUnlinked === "boolean") this.showUnlinked = next.showUnlinked;
+		if (typeof next.mentions === "boolean") this.mentions = next.mentions;
+		if (typeof next.references === "boolean") this.references = next.references;
+		if (typeof next.grouping === "string") this.grouping = next.grouping;
 		await super.setState(state, result);
 		if (this.canvas) this.render(true);
 	}
@@ -115,8 +130,25 @@ export class FlowView extends ItemView {
 	private isRelevant(path: string): boolean {
 		return (
 			path.startsWith(`${tasksPath(this.settings)}/`) ||
+			path.startsWith(`${referencesPath(this.settings)}/`) ||
 			path.startsWith(`${projectsPath(this.settings)}/`)
 		);
+	}
+
+	private addToggle(
+		toolbar: HTMLElement,
+		key: string,
+		label: string,
+		get: () => boolean,
+		set: (value: boolean) => void
+	): void {
+		const button = toolbar.createEl("button", { cls: "spm-flow-toggle", text: label });
+		button.addEventListener("click", () => {
+			set(!get());
+			this.app.workspace.requestSaveLayout();
+			this.render(true);
+		});
+		this.toggles.set(key, button);
 	}
 
 	private buildToolbar(toolbar: HTMLElement): void {
@@ -127,22 +159,18 @@ export class FlowView extends ItemView {
 			this.render(true);
 		});
 
-		this.doneButton = toolbar.createEl("button", {
-			cls: "spm-flow-toggle",
-			text: "Hide done",
-		});
-		this.doneButton.addEventListener("click", () => {
-			this.hideDone = !this.hideDone;
-			this.app.workspace.requestSaveLayout();
-			this.render(true);
-		});
+		this.addToggle(toolbar, "done", "Hide done", () => this.hideDone, (value) => (this.hideDone = value));
+		this.addToggle(toolbar, "mentions", "Mentions", () => this.mentions, (value) => (this.mentions = value));
+		this.addToggle(toolbar, "references", "References", () => this.references, (value) => (this.references = value));
+		this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => (this.showUnlinked = value));
 
-		this.unlinkedButton = toolbar.createEl("button", {
-			cls: "spm-flow-toggle",
-			text: "Unlinked",
-		});
-		this.unlinkedButton.addEventListener("click", () => {
-			this.showUnlinked = !this.showUnlinked;
+		this.groupingSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-grouping" });
+		for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
+			this.groupingSelect.createEl("option", { value: mode, text: `Group by ${label.toLowerCase()}` });
+		}
+		this.groupingSelect.value = this.grouping;
+		this.groupingSelect.addEventListener("change", () => {
+			this.grouping = this.groupingSelect.value as GroupingMode;
 			this.app.workspace.requestSaveLayout();
 			this.render(true);
 		});
@@ -191,13 +219,19 @@ export class FlowView extends ItemView {
 		const projects = projectFiles(this.app, this.settings);
 		this.syncProjectOptions(projects);
 
-		const records = collectTaskRecords(this.app, this.settings);
-		const graph = buildTaskGraph(records, createTaskResolver(this.app, records));
+		const records = collectNotes(this.app, this.settings, { references: this.references });
+		const graph = buildNoteGraph(records, createNoteResolver(this.app, records), {
+			mentions: this.mentions,
+		});
+
 		const projectPath = this.projectPath;
 		let scoped = selectSubgraph(
 			graph,
-			(record: TaskRecord) => projectPath !== null && record.projectPath === projectPath
+			(record: NoteRecord) => projectPath !== null && record.projectPath === projectPath
 		);
+		for (const record of scoped.nodes) {
+			record.external = scoped.external.has(record.path);
+		}
 
 		if (this.hideDone) {
 			scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
@@ -209,18 +243,25 @@ export class FlowView extends ItemView {
 			scoped = dropNodes(scoped, (record) => !connected.has(record.path));
 		}
 
-		this.doneButton.toggleClass("is-active", this.hideDone);
-		this.unlinkedButton.toggleClass("is-active", this.showUnlinked);
-		this.unlinkedButton.setText(`Unlinked (${unlinkedCount})`);
+		this.toggles.get("done")?.toggleClass("is-active", this.hideDone);
+		this.toggles.get("mentions")?.toggleClass("is-active", this.mentions);
+		this.toggles.get("references")?.toggleClass("is-active", this.references);
+		this.toggles.get("unlinked")?.toggleClass("is-active", this.showUnlinked);
+		this.toggles.get("unlinked")?.setText(`Unlinked (${unlinkedCount})`);
+		this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked);
 
 		this.warningEl.empty();
-		if (scoped.unresolved.length > 0) {
-			const targets = [...new Set(scoped.unresolved.map((entry) => entry.target))];
+		const unresolved = scoped.unresolved.filter((entry) => entry.kind !== "mention");
+		if (unresolved.length > 0) {
+			const targets = [...new Set(unresolved.map((entry) => entry.target))];
 			this.warningEl.setText(`${targets.length} unresolved link(s)`);
 			this.warningEl.setAttribute("title", targets.join("\n"));
 		}
 
-		this.canvas.render(layoutGraph(scoped), { fit });
+		this.canvas.render(
+			layoutGraph(scoped, { ...DEFAULT_LAYOUT_OPTIONS, grouping: this.grouping }),
+			{ fit }
+		);
 		this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
 	}
 

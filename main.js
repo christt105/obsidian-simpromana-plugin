@@ -85,6 +85,9 @@ function projectsPath(s) {
 function tasksPath(s) {
   return (0, import_obsidian2.normalizePath)(`${s.rootFolder}/${s.tasksFolder}`);
 }
+function referencesPath(s) {
+  return (0, import_obsidian2.normalizePath)(`${s.rootFolder}/${s.referencesFolder}`);
+}
 function generateId(length = 6) {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -428,7 +431,8 @@ var RELATION_KEYS = {
 var RELATION_LABELS = {
   dependency: "Blocks",
   continuation: "Continues",
-  related: "Related"
+  related: "Related",
+  mention: "Mentions"
 };
 function normalizeKey(key) {
   return key.toLowerCase().replace(/[\s_-]/g, "");
@@ -458,22 +462,27 @@ function toTargetList(value) {
 
 // src/graph/build.ts
 function relationId(relation) {
-  if (relation.kind === "related") {
-    const [a, b] = [relation.from, relation.to].sort();
-    return `related|${a}|${b}`;
+  if (relation.kind === "dependency" || relation.kind === "continuation") {
+    return `${relation.kind}|${relation.from}|${relation.to}`;
   }
-  return `${relation.kind}|${relation.from}|${relation.to}`;
+  const [a, b] = [relation.from, relation.to].sort();
+  return `${relation.kind}|${a}|${b}`;
+}
+function pairId(from, to) {
+  const [a, b] = [from, to].sort();
+  return `${a}|${b}`;
 }
 function orient(source, target, kind, inverted) {
-  if (kind === "related") {
+  if (kind !== "dependency" && kind !== "continuation") {
     const [from, to] = [source, target].sort();
     return { from, to, kind };
   }
   return inverted ? { from: target, to: source, kind } : { from: source, to: target, kind };
 }
-function buildTaskGraph(records, resolve) {
+function buildNoteGraph(records, resolve, options = { mentions: true }) {
   const known = new Set(records.map((record) => record.path));
   const relations = /* @__PURE__ */ new Map();
+  const pairs = /* @__PURE__ */ new Set();
   const unresolved = [];
   for (const record of records) {
     for (const [key, value] of Object.entries(record.frontmatter)) {
@@ -489,6 +498,20 @@ function buildTaskGraph(records, resolve) {
         if (targetPath === record.path)
           continue;
         const relation = orient(record.path, targetPath, relationKey.kind, relationKey.inverted);
+        relations.set(relationId(relation), relation);
+        pairs.add(pairId(relation.from, relation.to));
+      }
+    }
+  }
+  if (options.mentions) {
+    for (const record of records) {
+      for (const link of record.links) {
+        const targetPath = resolve(link, record.path);
+        if (!targetPath || !known.has(targetPath) || targetPath === record.path)
+          continue;
+        if (pairs.has(pairId(record.path, targetPath)))
+          continue;
+        const relation = orient(record.path, targetPath, "mention", false);
         relations.set(relationId(relation), relation);
       }
     }
@@ -545,6 +568,60 @@ function isOrderingKind(kind) {
   return ORDERING_KINDS.includes(kind);
 }
 
+// src/graph/grouping.ts
+var GROUPING_LABELS = {
+  status: "Status",
+  milestone: "Milestone",
+  priority: "Priority",
+  none: "Nothing"
+};
+var STATUS_ORDER = ["todo", "doing", "review", "done"];
+var PRIORITY_ORDER = ["high", "medium", "low"];
+function rankOf(order, value) {
+  const index = order.indexOf(value.toLowerCase());
+  return index === -1 ? order.length : index;
+}
+var REFERENCE_GROUP = { key: "reference", label: "Reference notes", rank: 99 };
+function grouperFor(mode) {
+  if (mode !== "none") {
+    const inner = grouperByField(mode);
+    return (record) => record.kind === "reference" ? REFERENCE_GROUP : inner(record);
+  }
+  return () => ({ key: "", label: "", rank: 0 });
+}
+function grouperByField(mode) {
+  if (mode === "status") {
+    return (record) => ({
+      key: record.status || "\u2014",
+      label: record.status || "No status",
+      rank: rankOf(STATUS_ORDER, record.status)
+    });
+  }
+  if (mode === "priority") {
+    return (record) => ({
+      key: record.priority || "\u2014",
+      label: record.priority || "No priority",
+      rank: rankOf(PRIORITY_ORDER, record.priority)
+    });
+  }
+  if (mode === "milestone") {
+    return (record) => {
+      var _a, _b;
+      return {
+        key: (_a = record.milestone) != null ? _a : "\u2014",
+        label: (_b = record.milestone) != null ? _b : "No milestone",
+        rank: record.milestone ? 0 : 1
+      };
+    };
+  }
+  return () => ({ key: "", label: "", rank: 0 });
+}
+function compareGroups(a, b) {
+  if (a.rank !== b.rank)
+    return a.rank - b.rank;
+  return a.label.localeCompare(b.label, void 0, { numeric: true });
+}
+
 // src/graph/layout.ts
 var DEFAULT_LAYOUT_OPTIONS = {
   nodeWidth: 210,
@@ -552,8 +629,25 @@ var DEFAULT_LAYOUT_OPTIONS = {
   layerGap: 76,
   rowGap: 22,
   componentGap: 56,
-  dummyHeight: 14
+  dummyHeight: 14,
+  headerHeight: 34,
+  grouping: "status"
 };
+function undirectedAdjacency(relations) {
+  const adjacency = /* @__PURE__ */ new Map();
+  const push = (from, to) => {
+    const list = adjacency.get(from);
+    if (list)
+      list.push(to);
+    else
+      adjacency.set(from, [to]);
+  };
+  for (const relation of relations) {
+    push(relation.from, relation.to);
+    push(relation.to, relation.from);
+  }
+  return adjacency;
+}
 function findBackEdges(edges) {
   var _a, _b, _c;
   const outgoing = /* @__PURE__ */ new Map();
@@ -592,11 +686,12 @@ function findBackEdges(edges) {
   }
   return back;
 }
-function assignLayers(paths, edges) {
+function assignLayers(paths, edges, relations) {
   var _a, _b, _c, _d, _e, _f, _g;
   const layer = new Map(paths.map((path) => [path, 0]));
   const outgoing = /* @__PURE__ */ new Map();
   const inDegree = new Map(paths.map((path) => [path, 0]));
+  const constrained = /* @__PURE__ */ new Set();
   for (const edge of edges) {
     const list = outgoing.get(edge.source);
     if (list)
@@ -604,6 +699,8 @@ function assignLayers(paths, edges) {
     else
       outgoing.set(edge.source, [edge]);
     inDegree.set(edge.target, ((_a = inDegree.get(edge.target)) != null ? _a : 0) + 1);
+    constrained.add(edge.source);
+    constrained.add(edge.target);
   }
   const queue = paths.filter((path) => {
     var _a2;
@@ -630,7 +727,47 @@ function assignLayers(paths, edges) {
         layer.set(edge.target, candidate);
     }
   }
+  spreadUnconstrained(paths, relations, layer, constrained);
   return layer;
+}
+function spreadUnconstrained(paths, relations, layer, constrained) {
+  var _a, _b;
+  const free = paths.filter((path) => !constrained.has(path));
+  if (free.length === 0)
+    return;
+  const adjacency = undirectedAdjacency(relations);
+  const settled = new Set(constrained);
+  const queue = [...constrained].sort(
+    (a, b) => {
+      var _a2, _b2;
+      return ((_a2 = layer.get(a)) != null ? _a2 : 0) - ((_b2 = layer.get(b)) != null ? _b2 : 0);
+    }
+  );
+  const degreeOf = (path) => {
+    var _a2;
+    return ((_a2 = adjacency.get(path)) != null ? _a2 : []).length;
+  };
+  const pending = new Set(free.filter((path) => degreeOf(path) > 0));
+  while (pending.size > 0) {
+    if (queue.length === 0) {
+      const root = [...pending].sort(
+        (a, b) => degreeOf(b) - degreeOf(a) || a.localeCompare(b)
+      )[0];
+      layer.set(root, 0);
+      settled.add(root);
+      pending.delete(root);
+      queue.push(root);
+    }
+    const current = queue.shift();
+    for (const neighbour of (_a = adjacency.get(current)) != null ? _a : []) {
+      if (settled.has(neighbour))
+        continue;
+      layer.set(neighbour, ((_b = layer.get(current)) != null ? _b : 0) + 1);
+      settled.add(neighbour);
+      pending.delete(neighbour);
+      queue.push(neighbour);
+    }
+  }
 }
 function groupComponents(paths, relations) {
   const parent = new Map(paths.map((path) => [path, path]));
@@ -750,7 +887,7 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
     };
   });
   const paths = [...records.keys()];
-  const layerOf = assignLayers(paths, ordering);
+  const layerOf = assignLayers(paths, ordering, relations);
   const componentOf = groupComponents(paths, relations);
   const degree = new Map(paths.map((path) => [path, 0]));
   for (const relation of relations) {
@@ -788,6 +925,7 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
   const step = options.nodeWidth + options.layerGap;
   const layoutNodes = [];
   const layoutEdges = [];
+  const layoutGroups = [];
   let maxLayers = 0;
   let top = 0;
   const componentIds = [...components.keys()].sort((a, b) => {
@@ -840,6 +978,10 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
       }
       return entry;
     };
+    const connect = (from, to) => {
+      linkOf(from.key).next.push(to);
+      linkOf(to.key).previous.push(from);
+    };
     for (const edge of componentEdges) {
       const chain = [
         cells.get(edge.source),
@@ -847,11 +989,20 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
         cells.get(edge.target)
       ];
       for (let index = 0; index < chain.length - 1; index++) {
-        const from = chain[index];
-        const to = chain[index + 1];
-        linkOf(from.key).next.push(to);
-        linkOf(to.key).previous.push(from);
+        connect(chain[index], chain[index + 1]);
       }
+    }
+    for (const relation of relations) {
+      if (isOrderingKind(relation.kind))
+        continue;
+      if (!memberSet.has(relation.from) || !memberSet.has(relation.to))
+        continue;
+      const from = cells.get(relation.from);
+      const to = cells.get(relation.to);
+      if (to.layer - from.layer === 1)
+        connect(from, to);
+      else if (from.layer - to.layer === 1)
+        connect(to, from);
     }
     for (const layer of layers) {
       layer.sort((a, b) => {
@@ -903,7 +1054,7 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
     });
   }
   for (const relation of relations) {
-    if (relation.kind !== "related")
+    if (isOrderingKind(relation.kind))
       continue;
     const from = nodeByPath.get(relation.from);
     const to = nodeByPath.get(relation.to);
@@ -921,30 +1072,46 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
       top += options.componentGap;
     unlinkedTop = top;
     const columns = Math.max(4, maxLayers);
-    const sorted = [...unlinked].sort(
-      (a, b) => records.get(a).title.localeCompare(records.get(b).title)
-    );
-    sorted.forEach((path, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      layoutNodes.push({
-        record: records.get(path),
-        x: column * step,
-        y: top + row * (options.nodeHeight + options.rowGap),
-        width: options.nodeWidth,
-        height: options.nodeHeight,
-        layer: column,
-        unlinked: true
+    const gridWidth = columns * step - options.layerGap;
+    const grouper = grouperFor(options.grouping);
+    const buckets = /* @__PURE__ */ new Map();
+    for (const path of unlinked) {
+      const record = records.get(path);
+      const group = grouper(record);
+      const bucket = buckets.get(group.key);
+      if (bucket)
+        bucket.records.push(record);
+      else
+        buckets.set(group.key, { group, records: [record] });
+    }
+    const ordered = [...buckets.values()].sort((a, b) => compareGroups(a.group, b.group));
+    for (const bucket of ordered) {
+      if (bucket.group.label) {
+        layoutGroups.push({ label: bucket.group.label, x: 0, y: top, width: gridWidth });
+        top += options.headerHeight;
+      }
+      bucket.records.sort((a, b) => a.title.localeCompare(b.title));
+      bucket.records.forEach((record, index) => {
+        layoutNodes.push({
+          record,
+          x: index % columns * step,
+          y: top + Math.floor(index / columns) * (options.nodeHeight + options.rowGap),
+          width: options.nodeWidth,
+          height: options.nodeHeight,
+          layer: index % columns,
+          unlinked: true
+        });
       });
-    });
-    top += Math.ceil(sorted.length / columns) * (options.nodeHeight + options.rowGap);
+      const rows = Math.ceil(bucket.records.length / columns);
+      top += rows * (options.nodeHeight + options.rowGap) + options.componentGap;
+    }
   }
   const width = layoutNodes.reduce((max, node) => Math.max(max, node.x + node.width), 0);
   const height = layoutNodes.reduce((max, node) => Math.max(max, node.y + node.height), 0);
-  return { nodes: layoutNodes, edges: layoutEdges, width, height, unlinkedTop };
+  return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, width, height, unlinkedTop };
 }
 
-// src/lib/tasks.ts
+// src/lib/notes.ts
 var ID_PATTERN = /^(.*?)\s+-\s+([A-Za-z0-9]+)$/;
 function splitBasename(basename) {
   const match = basename.match(ID_PATTERN);
@@ -953,33 +1120,42 @@ function splitBasename(basename) {
 function stringValue(value) {
   return typeof value === "string" ? value.trim() : "";
 }
-function collectTaskRecords(app, settings) {
+function readNote(app, file, kind) {
   var _a, _b, _c, _d, _e;
-  const prefix = `${tasksPath(settings)}/`;
+  const cache = app.metadataCache.getFileCache(file);
+  const frontmatter = (_a = cache == null ? void 0 : cache.frontmatter) != null ? _a : {};
+  const { title, id } = splitBasename(file.basename);
+  const projectTarget = parseLinkTarget(frontmatter.project);
+  const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, file.path) : null;
+  return {
+    kind,
+    path: file.path,
+    basename: file.basename,
+    title,
+    id,
+    projectPath: (_b = projectFile == null ? void 0 : projectFile.path) != null ? _b : null,
+    projectName: (_d = (_c = projectFile == null ? void 0 : projectFile.basename) != null ? _c : projectTarget == null ? void 0 : projectTarget.split("/").pop()) != null ? _d : null,
+    status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
+    priority: stringValue(frontmatter.priority),
+    milestone: stringValue(frontmatter.milestone) || null,
+    frontmatter,
+    links: ((_e = cache == null ? void 0 : cache.links) != null ? _e : []).map((link) => link.link)
+  };
+}
+function collectNotes(app, settings, options) {
+  const taskPrefix = `${tasksPath(settings)}/`;
+  const referencePrefix = `${referencesPath(settings)}/`;
   const records = [];
   for (const file of app.vault.getMarkdownFiles()) {
-    if (!file.path.startsWith(prefix))
-      continue;
-    const frontmatter = (_b = (_a = app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter) != null ? _b : {};
-    const { title, id } = splitBasename(file.basename);
-    const projectTarget = parseLinkTarget(frontmatter.project);
-    const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, file.path) : null;
-    records.push({
-      path: file.path,
-      basename: file.basename,
-      title,
-      id,
-      projectPath: (_c = projectFile == null ? void 0 : projectFile.path) != null ? _c : null,
-      projectName: (_e = (_d = projectFile == null ? void 0 : projectFile.basename) != null ? _d : projectTarget == null ? void 0 : projectTarget.split("/").pop()) != null ? _e : null,
-      status: stringValue(frontmatter.tstatus) || "Todo",
-      priority: stringValue(frontmatter.priority),
-      milestone: stringValue(frontmatter.milestone) || null,
-      frontmatter
-    });
+    if (file.path.startsWith(taskPrefix)) {
+      records.push(readNote(app, file, "task"));
+    } else if (options.references && file.path.startsWith(referencePrefix)) {
+      records.push(readNote(app, file, "reference"));
+    }
   }
   return records;
 }
-function createTaskResolver(app, records) {
+function createNoteResolver(app, records) {
   const byBasename = /* @__PURE__ */ new Map();
   const byId = /* @__PURE__ */ new Map();
   for (const record of records) {
@@ -1027,11 +1203,14 @@ function curveBetween(from, to) {
   const direction = dy >= 0 ? 1 : -1;
   return `M ${from.x} ${from.y} C ${from.x} ${from.y + offset * direction}, ${to.x} ${to.y - offset * direction}, ${to.x} ${to.y}`;
 }
+function isUndirected(edge) {
+  return edge.relation.kind === "related" || edge.relation.kind === "mention";
+}
 function edgePath(edge) {
   const points = edge.points;
   if (points.length < 2)
     return "";
-  if (edge.relation.kind === "related")
+  if (isUndirected(edge))
     return curveBetween(points[0], points[1]);
   const direction = edge.cyclic ? -1 : 1;
   let path = `M ${points[0].x} ${points[0].y}`;
@@ -1138,6 +1317,9 @@ var FlowCanvas = class {
     if (layout.unlinkedTop !== null) {
       this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
     }
+    for (const group of layout.groups) {
+      this.edgeLayer.appendChild(this.buildGroupHeader(group));
+    }
     for (const edge of layout.edges) {
       this.edgeLayer.appendChild(this.buildEdge(edge));
       this.link(edge.relation.from, edge.relation.to);
@@ -1205,13 +1387,28 @@ var FlowCanvas = class {
     group.appendChild(label);
     return group;
   }
+  buildGroupHeader(group) {
+    const element = svgEl("g", { class: "spm-flow-group" });
+    const label = svgEl("text", { x: "2", y: String(group.y + 20) });
+    label.textContent = group.label;
+    element.appendChild(label);
+    element.appendChild(
+      svgEl("line", {
+        x1: "0",
+        y1: String(group.y + 28),
+        x2: String(group.width),
+        y2: String(group.y + 28)
+      })
+    );
+    return element;
+  }
   buildEdge(edge) {
     const kind = edge.cyclic ? "cycle" : edge.relation.kind;
     const path = svgEl("path", {
       class: `spm-flow-edge is-${kind}`,
       d: edgePath(edge)
     });
-    if (edge.relation.kind !== "related") {
+    if (!isUndirected(edge)) {
       path.setAttribute("marker-end", `url(#spm-arrow-${kind})`);
     }
     this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
@@ -1230,17 +1427,27 @@ var FlowCanvas = class {
     const card = document.createElement("div");
     card.className = "spm-flow-card";
     card.dataset.status = statusSlug(record.status);
+    card.dataset.kind = record.kind;
     if (node.unlinked)
       card.addClass("is-unlinked");
+    if (record.external)
+      card.addClass("is-external");
     const title = card.createDiv({ cls: "spm-flow-card-title", text: record.title });
     title.setAttribute("title", record.title);
     const meta = card.createDiv({ cls: "spm-flow-card-meta" });
-    meta.createSpan({ cls: "spm-flow-chip is-status", text: record.status });
+    if (record.kind === "reference") {
+      meta.createSpan({ cls: "spm-flow-chip is-reference", text: "Reference" });
+    } else {
+      meta.createSpan({ cls: "spm-flow-chip is-status", text: record.status });
+    }
     if (record.priority) {
       meta.createSpan({ cls: `spm-flow-chip is-priority is-${record.priority}`, text: record.priority });
     }
     if (record.milestone) {
       meta.createSpan({ cls: "spm-flow-chip", text: record.milestone });
+    }
+    if (record.external && record.projectName) {
+      meta.createSpan({ cls: "spm-flow-chip", text: record.projectName });
     }
     holder.appendChild(card);
     group.appendChild(holder);
@@ -1262,7 +1469,11 @@ var FlowCanvas = class {
   tooltipFor(node) {
     var _a, _b;
     const record = node.record;
-    const lines = [record.title, `Status: ${record.status}`];
+    const lines = [record.title];
+    if (record.kind === "reference")
+      lines.push("Reference note");
+    else
+      lines.push(`Status: ${record.status}`);
     if (record.priority)
       lines.push(`Priority: ${record.priority}`);
     if (record.milestone)
@@ -1320,7 +1531,8 @@ var FLOW_VIEW_TYPE = "simpromana-flow";
 var LEGEND = [
   { kind: "dependency", label: RELATION_LABELS.dependency },
   { kind: "continuation", label: RELATION_LABELS.continuation },
-  { kind: "related", label: RELATION_LABELS.related }
+  { kind: "related", label: RELATION_LABELS.related },
+  { kind: "mention", label: RELATION_LABELS.mention }
 ];
 var FlowView = class extends import_obsidian7.ItemView {
   constructor(leaf, settings) {
@@ -1329,6 +1541,10 @@ var FlowView = class extends import_obsidian7.ItemView {
     this.projectPath = null;
     this.hideDone = false;
     this.showUnlinked = false;
+    this.mentions = true;
+    this.references = false;
+    this.grouping = "status";
+    this.toggles = /* @__PURE__ */ new Map();
     this.canvas = null;
   }
   getViewType() {
@@ -1381,7 +1597,10 @@ var FlowView = class extends import_obsidian7.ItemView {
     return {
       projectPath: (_a = this.projectPath) != null ? _a : void 0,
       hideDone: this.hideDone,
-      showUnlinked: this.showUnlinked
+      showUnlinked: this.showUnlinked,
+      mentions: this.mentions,
+      references: this.references,
+      grouping: this.grouping
     };
   }
   async setState(state, result) {
@@ -1392,12 +1611,27 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.hideDone = next.hideDone;
     if (typeof next.showUnlinked === "boolean")
       this.showUnlinked = next.showUnlinked;
+    if (typeof next.mentions === "boolean")
+      this.mentions = next.mentions;
+    if (typeof next.references === "boolean")
+      this.references = next.references;
+    if (typeof next.grouping === "string")
+      this.grouping = next.grouping;
     await super.setState(state, result);
     if (this.canvas)
       this.render(true);
   }
   isRelevant(path) {
-    return path.startsWith(`${tasksPath(this.settings)}/`) || path.startsWith(`${projectsPath(this.settings)}/`);
+    return path.startsWith(`${tasksPath(this.settings)}/`) || path.startsWith(`${referencesPath(this.settings)}/`) || path.startsWith(`${projectsPath(this.settings)}/`);
+  }
+  addToggle(toolbar, key, label, get, set) {
+    const button = toolbar.createEl("button", { cls: "spm-flow-toggle", text: label });
+    button.addEventListener("click", () => {
+      set(!get());
+      this.app.workspace.requestSaveLayout();
+      this.render(true);
+    });
+    this.toggles.set(key, button);
   }
   buildToolbar(toolbar) {
     this.projectSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-project" });
@@ -1406,21 +1640,17 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.app.workspace.requestSaveLayout();
       this.render(true);
     });
-    this.doneButton = toolbar.createEl("button", {
-      cls: "spm-flow-toggle",
-      text: "Hide done"
-    });
-    this.doneButton.addEventListener("click", () => {
-      this.hideDone = !this.hideDone;
-      this.app.workspace.requestSaveLayout();
-      this.render(true);
-    });
-    this.unlinkedButton = toolbar.createEl("button", {
-      cls: "spm-flow-toggle",
-      text: "Unlinked"
-    });
-    this.unlinkedButton.addEventListener("click", () => {
-      this.showUnlinked = !this.showUnlinked;
+    this.addToggle(toolbar, "done", "Hide done", () => this.hideDone, (value) => this.hideDone = value);
+    this.addToggle(toolbar, "mentions", "Mentions", () => this.mentions, (value) => this.mentions = value);
+    this.addToggle(toolbar, "references", "References", () => this.references, (value) => this.references = value);
+    this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => this.showUnlinked = value);
+    this.groupingSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-grouping" });
+    for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
+      this.groupingSelect.createEl("option", { value: mode, text: `Group by ${label.toLowerCase()}` });
+    }
+    this.groupingSelect.value = this.grouping;
+    this.groupingSelect.addEventListener("change", () => {
+      this.grouping = this.groupingSelect.value;
       this.app.workspace.requestSaveLayout();
       this.render(true);
     });
@@ -1466,17 +1696,23 @@ var FlowView = class extends import_obsidian7.ItemView {
     }
   }
   render(fit) {
+    var _a, _b, _c, _d, _e;
     if (!this.canvas)
       return;
     const projects = projectFiles(this.app, this.settings);
     this.syncProjectOptions(projects);
-    const records = collectTaskRecords(this.app, this.settings);
-    const graph = buildTaskGraph(records, createTaskResolver(this.app, records));
+    const records = collectNotes(this.app, this.settings, { references: this.references });
+    const graph = buildNoteGraph(records, createNoteResolver(this.app, records), {
+      mentions: this.mentions
+    });
     const projectPath = this.projectPath;
     let scoped = selectSubgraph(
       graph,
       (record) => projectPath !== null && record.projectPath === projectPath
     );
+    for (const record of scoped.nodes) {
+      record.external = scoped.external.has(record.path);
+    }
     if (this.hideDone) {
       scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
     }
@@ -1485,16 +1721,23 @@ var FlowView = class extends import_obsidian7.ItemView {
     if (!this.showUnlinked) {
       scoped = dropNodes(scoped, (record) => !connected.has(record.path));
     }
-    this.doneButton.toggleClass("is-active", this.hideDone);
-    this.unlinkedButton.toggleClass("is-active", this.showUnlinked);
-    this.unlinkedButton.setText(`Unlinked (${unlinkedCount})`);
+    (_a = this.toggles.get("done")) == null ? void 0 : _a.toggleClass("is-active", this.hideDone);
+    (_b = this.toggles.get("mentions")) == null ? void 0 : _b.toggleClass("is-active", this.mentions);
+    (_c = this.toggles.get("references")) == null ? void 0 : _c.toggleClass("is-active", this.references);
+    (_d = this.toggles.get("unlinked")) == null ? void 0 : _d.toggleClass("is-active", this.showUnlinked);
+    (_e = this.toggles.get("unlinked")) == null ? void 0 : _e.setText(`Unlinked (${unlinkedCount})`);
+    this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked);
     this.warningEl.empty();
-    if (scoped.unresolved.length > 0) {
-      const targets = [...new Set(scoped.unresolved.map((entry) => entry.target))];
+    const unresolved = scoped.unresolved.filter((entry) => entry.kind !== "mention");
+    if (unresolved.length > 0) {
+      const targets = [...new Set(unresolved.map((entry) => entry.target))];
       this.warningEl.setText(`${targets.length} unresolved link(s)`);
       this.warningEl.setAttribute("title", targets.join("\n"));
     }
-    this.canvas.render(layoutGraph(scoped), { fit });
+    this.canvas.render(
+      layoutGraph(scoped, { ...DEFAULT_LAYOUT_OPTIONS, grouping: this.grouping }),
+      { fit }
+    );
     this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
   }
   updateEmptyState(projectCount, nodeCount, unlinkedCount) {

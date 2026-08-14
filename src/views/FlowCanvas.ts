@@ -1,5 +1,5 @@
 import { setTooltip } from "obsidian";
-import type { GraphLayout, LayoutEdge, LayoutNode, Point } from "../graph/layout";
+import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode, Point } from "../graph/layout";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MIN_SCALE = 0.15;
@@ -40,10 +40,14 @@ function curveBetween(from: Point, to: Point): string {
 	return `M ${from.x} ${from.y} C ${from.x} ${from.y + offset * direction}, ${to.x} ${to.y - offset * direction}, ${to.x} ${to.y}`;
 }
 
+function isUndirected(edge: LayoutEdge): boolean {
+	return edge.relation.kind === "related" || edge.relation.kind === "mention";
+}
+
 function edgePath(edge: LayoutEdge): string {
 	const points = edge.points;
 	if (points.length < 2) return "";
-	if (edge.relation.kind === "related") return curveBetween(points[0], points[1]);
+	if (isUndirected(edge)) return curveBetween(points[0], points[1]);
 
 	const direction = edge.cyclic ? -1 : 1;
 	let path = `M ${points[0].x} ${points[0].y}`;
@@ -114,6 +118,9 @@ export class FlowCanvas {
 
 		if (layout.unlinkedTop !== null) {
 			this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
+		}
+		for (const group of layout.groups) {
+			this.edgeLayer.appendChild(this.buildGroupHeader(group));
 		}
 
 		for (const edge of layout.edges) {
@@ -188,13 +195,29 @@ export class FlowCanvas {
 		return group;
 	}
 
+	private buildGroupHeader(group: LayoutGroup): SVGGElement {
+		const element = svgEl("g", { class: "spm-flow-group" });
+		const label = svgEl("text", { x: "2", y: String(group.y + 20) });
+		label.textContent = group.label;
+		element.appendChild(label);
+		element.appendChild(
+			svgEl("line", {
+				x1: "0",
+				y1: String(group.y + 28),
+				x2: String(group.width),
+				y2: String(group.y + 28),
+			})
+		);
+		return element;
+	}
+
 	private buildEdge(edge: LayoutEdge): SVGPathElement {
 		const kind = edge.cyclic ? "cycle" : edge.relation.kind;
 		const path = svgEl("path", {
 			class: `spm-flow-edge is-${kind}`,
 			d: edgePath(edge),
 		});
-		if (edge.relation.kind !== "related") {
+		if (!isUndirected(edge)) {
 			path.setAttribute("marker-end", `url(#spm-arrow-${kind})`);
 		}
 		this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
@@ -216,18 +239,27 @@ export class FlowCanvas {
 		const card = document.createElement("div");
 		card.className = "spm-flow-card";
 		card.dataset.status = statusSlug(record.status);
+		card.dataset.kind = record.kind;
 		if (node.unlinked) card.addClass("is-unlinked");
+		if (record.external) card.addClass("is-external");
 
 		const title = card.createDiv({ cls: "spm-flow-card-title", text: record.title });
 		title.setAttribute("title", record.title);
 
 		const meta = card.createDiv({ cls: "spm-flow-card-meta" });
-		meta.createSpan({ cls: "spm-flow-chip is-status", text: record.status });
+		if (record.kind === "reference") {
+			meta.createSpan({ cls: "spm-flow-chip is-reference", text: "Reference" });
+		} else {
+			meta.createSpan({ cls: "spm-flow-chip is-status", text: record.status });
+		}
 		if (record.priority) {
 			meta.createSpan({ cls: `spm-flow-chip is-priority is-${record.priority}`, text: record.priority });
 		}
 		if (record.milestone) {
 			meta.createSpan({ cls: "spm-flow-chip", text: record.milestone });
+		}
+		if (record.external && record.projectName) {
+			meta.createSpan({ cls: "spm-flow-chip", text: record.projectName });
 		}
 
 		holder.appendChild(card);
@@ -251,7 +283,9 @@ export class FlowCanvas {
 
 	private tooltipFor(node: LayoutNode): string {
 		const record = node.record;
-		const lines = [record.title, `Status: ${record.status}`];
+		const lines = [record.title];
+		if (record.kind === "reference") lines.push("Reference note");
+		else lines.push(`Status: ${record.status}`);
 		if (record.priority) lines.push(`Priority: ${record.priority}`);
 		if (record.milestone) lines.push(`Milestone: ${record.milestone}`);
 		if (record.projectName) lines.push(`Project: ${record.projectName}`);

@@ -66,6 +66,16 @@
 	border-top-color: var(--text-faint);
 }
 
+.spm-flow-legend-line.is-mention {
+	border-top-style: dashed;
+	border-top-width: 1px;
+	border-top-color: var(--color-purple);
+}
+
+.spm-flow-grouping.is-disabled {
+	opacity: 0.5;
+}
+
 .spm-flow-warning {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-warning);
@@ -123,6 +133,13 @@
 	stroke-linecap: round;
 }
 
+.spm-flow-edge.is-mention {
+	stroke: var(--color-purple);
+	stroke-width: 1.5;
+	stroke-dasharray: 5 4;
+	opacity: 0.55;
+}
+
 .spm-flow-edge.is-cycle {
 	stroke: var(--color-red);
 	stroke-dasharray: 4 3;
@@ -157,6 +174,17 @@
 .spm-flow-divider text {
 	fill: var(--text-faint);
 	font-size: 12px;
+}
+
+.spm-flow-group text {
+	fill: var(--text-muted);
+	font-size: 14px;
+	font-weight: var(--font-semibold);
+}
+
+.spm-flow-group line {
+	stroke: var(--background-modifier-border);
+	stroke-width: 1;
 }
 
 .spm-flow-node {
@@ -204,6 +232,21 @@
 .spm-flow-card.is-unlinked {
 	border-style: dashed;
 	background-color: var(--background-primary);
+}
+
+.spm-flow-card[data-kind="reference"] {
+	border-left-color: var(--color-purple);
+	border-style: dashed;
+	background-color: var(--background-primary-alt);
+}
+
+.spm-flow-card.is-external {
+	opacity: 0.7;
+	border-left-style: dotted;
+}
+
+.spm-flow-chip.is-reference {
+	color: var(--color-purple);
 }
 
 .spm-flow-card-title {

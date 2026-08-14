@@ -23,12 +23,14 @@ export const CANONICAL_RELATION_KEYS: Record<RelationKind, string> = {
 	dependency: "blocked_by",
 	continuation: "continues",
 	related: "related",
+	mention: "",
 };
 
 export const RELATION_LABELS: Record<RelationKind, string> = {
 	dependency: "Blocks",
 	continuation: "Continues",
 	related: "Related",
+	mention: "Mentions",
 };
 
 function normalizeKey(key: string): string {

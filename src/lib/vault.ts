@@ -9,6 +9,10 @@ export function tasksPath(s: SimpromanaSettings): string {
 	return normalizePath(`${s.rootFolder}/${s.tasksFolder}`);
 }
 
+export function referencesPath(s: SimpromanaSettings): string {
+	return normalizePath(`${s.rootFolder}/${s.referencesFolder}`);
+}
+
 export function generateId(length = 6): string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
 	return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");

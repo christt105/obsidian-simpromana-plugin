@@ -1,5 +1,7 @@
 import { isOrderingKind } from "./model";
-import type { TaskGraph, TaskRecord, TaskRelation } from "./model";
+import type { NoteGraph, NoteRecord, NoteRelation } from "./model";
+import { compareGroups, grouperFor } from "./grouping";
+import type { GroupingMode, NodeGroup } from "./grouping";
 
 export interface Point {
 	x: number;
@@ -7,7 +9,7 @@ export interface Point {
 }
 
 export interface LayoutNode {
-	record: TaskRecord;
+	record: NoteRecord;
 	x: number;
 	y: number;
 	width: number;
@@ -17,14 +19,22 @@ export interface LayoutNode {
 }
 
 export interface LayoutEdge {
-	relation: TaskRelation;
+	relation: NoteRelation;
 	points: Point[];
 	cyclic: boolean;
+}
+
+export interface LayoutGroup {
+	label: string;
+	x: number;
+	y: number;
+	width: number;
 }
 
 export interface GraphLayout {
 	nodes: LayoutNode[];
 	edges: LayoutEdge[];
+	groups: LayoutGroup[];
 	width: number;
 	height: number;
 	unlinkedTop: number | null;
@@ -37,6 +47,8 @@ export interface LayoutOptions {
 	rowGap: number;
 	componentGap: number;
 	dummyHeight: number;
+	headerHeight: number;
+	grouping: GroupingMode;
 }
 
 export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
@@ -46,11 +58,13 @@ export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
 	rowGap: 22,
 	componentGap: 56,
 	dummyHeight: 14,
+	headerHeight: 34,
+	grouping: "status",
 };
 
 interface Cell {
 	key: string;
-	record: TaskRecord | null;
+	record: NoteRecord | null;
 	layer: number;
 	order: number;
 	y: number;
@@ -58,15 +72,29 @@ interface Cell {
 }
 
 interface OrderingEdge {
-	relation: TaskRelation;
+	relation: NoteRelation;
 	source: string;
 	target: string;
 	cyclic: boolean;
 	dummies: Cell[];
 }
 
-function findBackEdges(edges: TaskRelation[]): Set<TaskRelation> {
-	const outgoing = new Map<string, TaskRelation[]>();
+function undirectedAdjacency(relations: NoteRelation[]): Map<string, string[]> {
+	const adjacency = new Map<string, string[]>();
+	const push = (from: string, to: string) => {
+		const list = adjacency.get(from);
+		if (list) list.push(to);
+		else adjacency.set(from, [to]);
+	};
+	for (const relation of relations) {
+		push(relation.from, relation.to);
+		push(relation.to, relation.from);
+	}
+	return adjacency;
+}
+
+function findBackEdges(edges: NoteRelation[]): Set<NoteRelation> {
+	const outgoing = new Map<string, NoteRelation[]>();
 	for (const edge of edges) {
 		const list = outgoing.get(edge.from);
 		if (list) list.push(edge);
@@ -74,7 +102,7 @@ function findBackEdges(edges: TaskRelation[]): Set<TaskRelation> {
 	}
 
 	const state = new Map<string, number>();
-	const back = new Set<TaskRelation>();
+	const back = new Set<NoteRelation>();
 
 	for (const edge of edges) {
 		for (const start of [edge.from, edge.to]) {
@@ -104,16 +132,23 @@ function findBackEdges(edges: TaskRelation[]): Set<TaskRelation> {
 	return back;
 }
 
-function assignLayers(paths: string[], edges: OrderingEdge[]): Map<string, number> {
+function assignLayers(
+	paths: string[],
+	edges: OrderingEdge[],
+	relations: NoteRelation[]
+): Map<string, number> {
 	const layer = new Map<string, number>(paths.map((path) => [path, 0]));
 	const outgoing = new Map<string, OrderingEdge[]>();
 	const inDegree = new Map<string, number>(paths.map((path) => [path, 0]));
+	const constrained = new Set<string>();
 
 	for (const edge of edges) {
 		const list = outgoing.get(edge.source);
 		if (list) list.push(edge);
 		else outgoing.set(edge.source, [edge]);
 		inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+		constrained.add(edge.source);
+		constrained.add(edge.target);
 	}
 
 	const queue = paths.filter((path) => (inDegree.get(path) ?? 0) === 0);
@@ -138,10 +173,51 @@ function assignLayers(paths: string[], edges: OrderingEdge[]): Map<string, numbe
 		}
 	}
 
+	spreadUnconstrained(paths, relations, layer, constrained);
 	return layer;
 }
 
-function groupComponents(paths: string[], relations: TaskRelation[]): Map<string, number> {
+function spreadUnconstrained(
+	paths: string[],
+	relations: NoteRelation[],
+	layer: Map<string, number>,
+	constrained: Set<string>
+): void {
+	const free = paths.filter((path) => !constrained.has(path));
+	if (free.length === 0) return;
+
+	const adjacency = undirectedAdjacency(relations);
+	const settled = new Set(constrained);
+	const queue = [...constrained].sort(
+		(a, b) => (layer.get(a) ?? 0) - (layer.get(b) ?? 0)
+	);
+
+	const degreeOf = (path: string) => (adjacency.get(path) ?? []).length;
+	const pending = new Set(free.filter((path) => degreeOf(path) > 0));
+
+	while (pending.size > 0) {
+		if (queue.length === 0) {
+			const root = [...pending].sort(
+				(a, b) => degreeOf(b) - degreeOf(a) || a.localeCompare(b)
+			)[0];
+			layer.set(root, 0);
+			settled.add(root);
+			pending.delete(root);
+			queue.push(root);
+		}
+
+		const current = queue.shift() as string;
+		for (const neighbour of adjacency.get(current) ?? []) {
+			if (settled.has(neighbour)) continue;
+			layer.set(neighbour, (layer.get(current) ?? 0) + 1);
+			settled.add(neighbour);
+			pending.delete(neighbour);
+			queue.push(neighbour);
+		}
+	}
+}
+
+function groupComponents(paths: string[], relations: NoteRelation[]): Map<string, number> {
 	const parent = new Map<string, string>(paths.map((path) => [path, path]));
 
 	const find = (path: string): string => {
@@ -259,7 +335,7 @@ function sideAnchor(node: LayoutNode, towards: LayoutNode): Point {
 	};
 }
 
-export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_LAYOUT_OPTIONS): GraphLayout {
+export function layoutGraph(graph: NoteGraph, options: LayoutOptions = DEFAULT_LAYOUT_OPTIONS): GraphLayout {
 	const records = new Map(graph.nodes.map((record) => [record.path, record]));
 	const relations = graph.relations.filter(
 		(relation) => records.has(relation.from) && records.has(relation.to)
@@ -279,7 +355,7 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 	});
 
 	const paths = [...records.keys()];
-	const layerOf = assignLayers(paths, ordering);
+	const layerOf = assignLayers(paths, ordering, relations);
 	const componentOf = groupComponents(paths, relations);
 
 	const degree = new Map<string, number>(paths.map((path) => [path, 0]));
@@ -295,7 +371,7 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 	for (const path of linked) {
 		cells.set(path, {
 			key: path,
-			record: records.get(path) as TaskRecord,
+			record: records.get(path) as NoteRecord,
 			layer: layerOf.get(path) ?? 0,
 			order: 0,
 			y: 0,
@@ -314,6 +390,7 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 	const step = options.nodeWidth + options.layerGap;
 	const layoutNodes: LayoutNode[] = [];
 	const layoutEdges: LayoutEdge[] = [];
+	const layoutGroups: LayoutGroup[] = [];
 	let maxLayers = 0;
 	let top = 0;
 
@@ -367,6 +444,11 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 			}
 			return entry;
 		};
+		const connect = (from: Cell, to: Cell) => {
+			linkOf(from.key).next.push(to);
+			linkOf(to.key).previous.push(from);
+		};
+
 		for (const edge of componentEdges) {
 			const chain = [
 				cells.get(edge.source) as Cell,
@@ -374,11 +456,17 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 				cells.get(edge.target) as Cell,
 			];
 			for (let index = 0; index < chain.length - 1; index++) {
-				const from = chain[index];
-				const to = chain[index + 1];
-				linkOf(from.key).next.push(to);
-				linkOf(to.key).previous.push(from);
+				connect(chain[index], chain[index + 1]);
 			}
+		}
+
+		for (const relation of relations) {
+			if (isOrderingKind(relation.kind)) continue;
+			if (!memberSet.has(relation.from) || !memberSet.has(relation.to)) continue;
+			const from = cells.get(relation.from) as Cell;
+			const to = cells.get(relation.to) as Cell;
+			if (to.layer - from.layer === 1) connect(from, to);
+			else if (from.layer - to.layer === 1) connect(to, from);
 		}
 
 		for (const layer of layers) {
@@ -397,7 +485,7 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 		for (const path of members) {
 			const cell = cells.get(path) as Cell;
 			layoutNodes.push({
-				record: cell.record as TaskRecord,
+				record: cell.record as NoteRecord,
 				x: cell.layer * step,
 				y: cell.y,
 				width: options.nodeWidth,
@@ -435,7 +523,7 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 	}
 
 	for (const relation of relations) {
-		if (relation.kind !== "related") continue;
+		if (isOrderingKind(relation.kind)) continue;
 		const from = nodeByPath.get(relation.from);
 		const to = nodeByPath.get(relation.to);
 		if (!from || !to) continue;
@@ -451,28 +539,48 @@ export function layoutGraph(graph: TaskGraph, options: LayoutOptions = DEFAULT_L
 	if (unlinked.length > 0) {
 		if (layoutNodes.length > 0) top += options.componentGap;
 		unlinkedTop = top;
+
 		const columns = Math.max(4, maxLayers);
-		const sorted = [...unlinked].sort((a, b) =>
-			(records.get(a) as TaskRecord).title.localeCompare((records.get(b) as TaskRecord).title)
-		);
-		sorted.forEach((path, index) => {
-			const column = index % columns;
-			const row = Math.floor(index / columns);
-			layoutNodes.push({
-				record: records.get(path) as TaskRecord,
-				x: column * step,
-				y: top + row * (options.nodeHeight + options.rowGap),
-				width: options.nodeWidth,
-				height: options.nodeHeight,
-				layer: column,
-				unlinked: true,
+		const gridWidth = columns * step - options.layerGap;
+		const grouper = grouperFor(options.grouping);
+		const buckets = new Map<string, { group: NodeGroup; records: NoteRecord[] }>();
+
+		for (const path of unlinked) {
+			const record = records.get(path) as NoteRecord;
+			const group = grouper(record);
+			const bucket = buckets.get(group.key);
+			if (bucket) bucket.records.push(record);
+			else buckets.set(group.key, { group, records: [record] });
+		}
+
+		const ordered = [...buckets.values()].sort((a, b) => compareGroups(a.group, b.group));
+
+		for (const bucket of ordered) {
+			if (bucket.group.label) {
+				layoutGroups.push({ label: bucket.group.label, x: 0, y: top, width: gridWidth });
+				top += options.headerHeight;
+			}
+
+			bucket.records.sort((a, b) => a.title.localeCompare(b.title));
+			bucket.records.forEach((record, index) => {
+				layoutNodes.push({
+					record,
+					x: (index % columns) * step,
+					y: top + Math.floor(index / columns) * (options.nodeHeight + options.rowGap),
+					width: options.nodeWidth,
+					height: options.nodeHeight,
+					layer: index % columns,
+					unlinked: true,
+				});
 			});
-		});
-		top += Math.ceil(sorted.length / columns) * (options.nodeHeight + options.rowGap);
+
+			const rows = Math.ceil(bucket.records.length / columns);
+			top += rows * (options.nodeHeight + options.rowGap) + options.componentGap;
+		}
 	}
 
 	const width = layoutNodes.reduce((max, node) => Math.max(max, node.x + node.width), 0);
 	const height = layoutNodes.reduce((max, node) => Math.max(max, node.y + node.height), 0);
 
-	return { nodes: layoutNodes, edges: layoutEdges, width, height, unlinkedTop };
+	return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, width, height, unlinkedTop };
 }
