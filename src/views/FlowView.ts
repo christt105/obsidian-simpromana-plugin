@@ -17,6 +17,7 @@ import { RELATION_LABELS } from "../graph/relations";
 import { collectNotes, createNoteResolver, projectFiles } from "../lib/notes";
 import { projectsPath, referencesPath, tasksPath } from "../lib/vault";
 import { FlowCanvas } from "./FlowCanvas";
+import type { CanvasMode } from "./FlowCanvas";
 
 export const FLOW_VIEW_TYPE = "simpromana-flow";
 
@@ -34,7 +35,13 @@ export interface FlowViewState extends Record<string, unknown> {
 	mentions?: boolean;
 	references?: boolean;
 	grouping?: GroupingMode;
+	mode?: CanvasMode;
 }
+
+const MODE_LABELS: Record<CanvasMode, string> = {
+	flow: "Flow layout",
+	force: "Force graph",
+};
 
 export class FlowView extends ItemView {
 	private projectPath: string | null = null;
@@ -43,8 +50,11 @@ export class FlowView extends ItemView {
 	private mentions = true;
 	private references = false;
 	private grouping: GroupingMode = "status";
+	private mode: CanvasMode = "flow";
 	private projectSelect: HTMLSelectElement;
 	private groupingSelect: HTMLSelectElement;
+	private modeSelect: HTMLSelectElement;
+	private unpinButton: HTMLButtonElement;
 	private toggles = new Map<string, HTMLButtonElement>();
 	private warningEl: HTMLElement;
 	private canvasEl: HTMLElement;
@@ -112,6 +122,7 @@ export class FlowView extends ItemView {
 			mentions: this.mentions,
 			references: this.references,
 			grouping: this.grouping,
+			mode: this.mode,
 		};
 	}
 
@@ -123,6 +134,7 @@ export class FlowView extends ItemView {
 		if (typeof next.mentions === "boolean") this.mentions = next.mentions;
 		if (typeof next.references === "boolean") this.references = next.references;
 		if (typeof next.grouping === "string") this.grouping = next.grouping;
+		if (next.mode === "flow" || next.mode === "force") this.mode = next.mode;
 		await super.setState(state, result);
 		if (this.canvas) this.render(true);
 	}
@@ -152,6 +164,17 @@ export class FlowView extends ItemView {
 	}
 
 	private buildToolbar(toolbar: HTMLElement): void {
+		this.modeSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-mode" });
+		for (const [mode, label] of Object.entries(MODE_LABELS)) {
+			this.modeSelect.createEl("option", { value: mode, text: label });
+		}
+		this.modeSelect.value = this.mode;
+		this.modeSelect.addEventListener("change", () => {
+			this.mode = this.modeSelect.value as CanvasMode;
+			this.app.workspace.requestSaveLayout();
+			this.render(true);
+		});
+
 		this.projectSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-project" });
 		this.projectSelect.addEventListener("change", () => {
 			this.projectPath = this.projectSelect.value || null;
@@ -173,6 +196,12 @@ export class FlowView extends ItemView {
 			this.grouping = this.groupingSelect.value as GroupingMode;
 			this.app.workspace.requestSaveLayout();
 			this.render(true);
+		});
+
+		this.unpinButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Unpin" });
+		this.unpinButton.addEventListener("click", () => {
+			this.canvas?.unpinAll();
+			this.unpinButton.hide();
 		});
 
 		const zoomOut = toolbar.createEl("button", { cls: "clickable-icon" });
@@ -248,7 +277,9 @@ export class FlowView extends ItemView {
 		this.toggles.get("references")?.toggleClass("is-active", this.references);
 		this.toggles.get("unlinked")?.toggleClass("is-active", this.showUnlinked);
 		this.toggles.get("unlinked")?.setText(`Unlinked (${unlinkedCount})`);
-		this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked);
+		this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked || this.mode === "force");
+		this.modeSelect.value = this.mode;
+		this.unpinButton.toggle(this.mode === "force");
 
 		this.warningEl.empty();
 		const unresolved = scoped.unresolved.filter((entry) => entry.kind !== "mention");
@@ -260,7 +291,7 @@ export class FlowView extends ItemView {
 
 		this.canvas.render(
 			layoutGraph(scoped, { ...DEFAULT_LAYOUT_OPTIONS, grouping: this.grouping }),
-			{ fit }
+			{ fit, mode: this.mode, relations: scoped.relations }
 		);
 		this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
 	}

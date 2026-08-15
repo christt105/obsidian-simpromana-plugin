@@ -1,10 +1,15 @@
 import { setTooltip } from "obsidian";
 import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode } from "../graph/layout";
+import type { NoteRelation } from "../graph/model";
+import { ForceSimulation } from "../graph/force";
+import type { ForceNode } from "../graph/force";
 import { CanvasGestures } from "./CanvasGestures";
-import type { Point, Transform } from "./CanvasGestures";
+import type { DragPhase, Point, Transform } from "./CanvasGestures";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const FIT_PADDING = 32;
+
+export type CanvasMode = "flow" | "force";
 
 interface HitArea {
 	path: string;
@@ -40,6 +45,17 @@ function curveBetween(from: Point, to: Point): string {
 	const offset = Math.max(20, Math.abs(dy) * 0.4);
 	const direction = dy >= 0 ? 1 : -1;
 	return `M ${from.x} ${from.y} C ${from.x} ${from.y + offset * direction}, ${to.x} ${to.y - offset * direction}, ${to.x} ${to.y}`;
+}
+
+function borderPoint(node: ForceNode, towards: Point): Point {
+	const dx = towards.x - node.x;
+	const dy = towards.y - node.y;
+	if (dx === 0 && dy === 0) return { x: node.x, y: node.y };
+
+	const scaleX = dx === 0 ? Infinity : node.width / 2 / Math.abs(dx);
+	const scaleY = dy === 0 ? Infinity : node.height / 2 / Math.abs(dy);
+	const scale = Math.min(scaleX, scaleY);
+	return { x: node.x + dx * scale, y: node.y + dy * scale };
 }
 
 function isUndirected(edge: LayoutEdge): boolean {
@@ -80,6 +96,10 @@ export class FlowCanvas {
 	private hovered: string | null = null;
 	private pendingFit = false;
 	private observer: ResizeObserver;
+	private mode: CanvasMode = "flow";
+	private simulation: ForceSimulation | null = null;
+	private simulationFrame = 0;
+	private grabOffset: Point = { x: 0, y: 0 };
 
 	constructor(private container: HTMLElement, private handlers: CanvasHandlers) {
 		this.svg = svgEl("svg", { class: "spm-flow-svg" });
@@ -99,6 +119,8 @@ export class FlowCanvas {
 			onHover: (point) => this.onHover(point),
 			onGesture: (active) => this.svg.toggleClass("is-panning", active),
 			onDoubleClick: (point) => this.onDoubleClick(point),
+			nodeAt: (point) => (this.mode === "force" ? this.hitTest(point) : null),
+			onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
 		});
 
 		this.observer = new ResizeObserver(() => {
@@ -109,24 +131,31 @@ export class FlowCanvas {
 	}
 
 	destroy(): void {
+		this.stopSimulation();
 		this.observer.disconnect();
 		this.gestures.destroy();
 		this.svg.remove();
 	}
 
-	render(layout: GraphLayout, options: { fit: boolean }): void {
+	render(
+		layout: GraphLayout,
+		options: { fit: boolean; mode: CanvasMode; relations: NoteRelation[] }
+	): void {
 		this.layout = layout;
+		this.mode = options.mode;
 		this.edgeLayer.empty();
 		this.edgeElements = [];
 		this.neighbours.clear();
 		this.hitAreas = [];
 		this.hovered = null;
 
-		if (layout.unlinkedTop !== null) {
-			this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
-		}
-		for (const group of layout.groups) {
-			this.edgeLayer.appendChild(this.buildGroupHeader(group));
+		if (this.mode === "flow") {
+			if (layout.unlinkedTop !== null) {
+				this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
+			}
+			for (const group of layout.groups) {
+				this.edgeLayer.appendChild(this.buildGroupHeader(group));
+			}
 		}
 		for (const edge of layout.edges) {
 			this.edgeLayer.appendChild(this.buildEdge(edge));
@@ -147,6 +176,7 @@ export class FlowCanvas {
 		}
 		for (const orphan of previous.values()) orphan.remove();
 
+		this.setupSimulation(layout, options.relations);
 		if (options.fit) this.fit(false);
 	}
 
@@ -161,7 +191,112 @@ export class FlowCanvas {
 		}
 
 		this.pendingFit = false;
-		this.gestures.fit(layout.width, layout.height, FIT_PADDING, animate);
+		const area =
+			this.simulation && this.mode === "force"
+				? this.simulation.bounds()
+				: { x: 0, y: 0, width: layout.width, height: layout.height };
+		this.gestures.fit(area, FIT_PADDING, animate);
+	}
+
+	unpinAll(): void {
+		if (!this.simulation) return;
+		this.simulation.unpinAll();
+		this.startSimulation();
+	}
+
+	get pinnedCount(): number {
+		return this.simulation?.pinnedCount ?? 0;
+	}
+
+	private setupSimulation(layout: GraphLayout, relations: NoteRelation[]): void {
+		this.stopSimulation();
+
+		if (this.mode !== "force") {
+			this.simulation = null;
+			this.nodeLayer.removeClass("is-simulating");
+			return;
+		}
+
+		const previous = this.simulation;
+		const simulation = new ForceSimulation(layout, relations);
+		let carriedNodes = 0;
+		for (const node of simulation.nodes) {
+			const carried = previous?.get(node.path);
+			if (!carried) continue;
+			node.x = carried.x;
+			node.y = carried.y;
+			node.fixed = carried.fixed;
+			carriedNodes++;
+		}
+		if (carriedNodes > 0) simulation.setAlpha(0.35);
+
+		this.simulation = simulation;
+		this.nodeLayer.addClass("is-simulating");
+		this.startSimulation();
+	}
+
+	private startSimulation(): void {
+		if (!this.simulation || this.simulationFrame) return;
+		const step = () => {
+			const simulation = this.simulation;
+			if (!simulation) {
+				this.simulationFrame = 0;
+				return;
+			}
+			simulation.tick();
+			this.updateSimulatedPositions();
+			this.simulationFrame = simulation.running ? requestAnimationFrame(step) : 0;
+		};
+		this.simulationFrame = requestAnimationFrame(step);
+	}
+
+	private stopSimulation(): void {
+		if (this.simulationFrame) cancelAnimationFrame(this.simulationFrame);
+		this.simulationFrame = 0;
+	}
+
+	private updateSimulatedPositions(): void {
+		const simulation = this.simulation;
+		if (!simulation) return;
+
+		this.hitAreas = [];
+		for (const node of simulation.nodes) {
+			const element = this.nodeElements.get(node.path);
+			const x = node.x - node.width / 2;
+			const y = node.y - node.height / 2;
+			element?.setAttribute("transform", `translate(${x} ${y})`);
+			this.hitAreas.push({ path: node.path, x, y, width: node.width, height: node.height });
+		}
+
+		for (const edge of this.edgeElements) {
+			const from = simulation.get(edge.from);
+			const to = simulation.get(edge.to);
+			if (!from || !to) continue;
+			edge.element.setAttribute(
+				"d",
+				curveBetween(borderPoint(from, to), borderPoint(to, from))
+			);
+		}
+	}
+
+	private onNodeDrag(path: string, point: Point, phase: DragPhase): void {
+		const simulation = this.simulation;
+		const node = simulation?.get(path);
+		if (!simulation || !node) return;
+
+		if (phase === "start") {
+			this.grabOffset = { x: node.x - point.x, y: node.y - point.y };
+			simulation.pin(path, node.x, node.y);
+			simulation.reheat(0.3);
+			this.startSimulation();
+			return;
+		}
+
+		if (phase === "move") {
+			simulation.pin(path, point.x + this.grabOffset.x, point.y + this.grabOffset.y);
+			simulation.reheat(0.3);
+			this.startSimulation();
+		}
 	}
 
 	zoomBy(factor: number): void {

@@ -9,12 +9,16 @@ export interface Transform {
 	k: number;
 }
 
+export type DragPhase = "start" | "move" | "end";
+
 export interface GestureHandlers {
 	onTransform(transform: Transform): void;
 	onTap(point: Point, event: PointerEvent): void;
 	onHover(point: Point | null): void;
 	onGesture(active: boolean): void;
 	onDoubleClick(point: Point): void;
+	nodeAt(point: Point): string | null;
+	onNodeDrag(path: string, point: Point, phase: DragPhase): void;
 }
 
 const MIN_SCALE = 0.05;
@@ -38,7 +42,8 @@ export class CanvasGestures {
 	transform: Transform = { x: 0, y: 0, k: 1 };
 
 	private pointers = new Map<number, Point>();
-	private mode: "none" | "pan" | "pinch" = "none";
+	private mode: "none" | "pan" | "pinch" | "node" = "none";
+	private draggedNode: string | null = null;
 	private pinchDistance = 0;
 	private pinchCentre: Point = { x: 0, y: 0 };
 	private velocity: Point = { x: 0, y: 0 };
@@ -127,19 +132,19 @@ export class CanvasGestures {
 		this.moveTo(this.scaled(factor, anchor), animate);
 	}
 
-	fit(width: number, height: number, padding: number, animate: boolean): void {
+	fit(area: { x: number; y: number; width: number; height: number }, padding: number, animate: boolean): void {
 		const bounds = this.bounds;
 		const scale = Math.min(
-			(bounds.width - padding * 2) / Math.max(width, 1),
-			(bounds.height - padding * 2) / Math.max(height, 1),
+			(bounds.width - padding * 2) / Math.max(area.width, 1),
+			(bounds.height - padding * 2) / Math.max(area.height, 1),
 			1
 		);
 		const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 		this.moveTo(
 			{
 				k,
-				x: (bounds.width - width * k) / 2,
-				y: (bounds.height - height * k) / 2,
+				x: (bounds.width - area.width * k) / 2 - area.x * k,
+				y: (bounds.height - area.height * k) / 2 - area.y * k,
 			},
 			animate
 		);
@@ -209,13 +214,20 @@ export class CanvasGestures {
 		this.pointers.set(event.pointerId, this.local(event));
 
 		if (this.pointers.size === 1) {
-			this.mode = "pan";
+			const graphPoint = this.toGraph(this.local(event));
+			this.draggedNode = this.handlers.nodeAt(graphPoint);
+			this.mode = this.draggedNode ? "node" : "pan";
 			this.moved = 0;
 			this.tapStart = performance.now();
 			this.lastMove = this.tapStart;
 			this.velocity = { x: 0, y: 0 };
-			this.handlers.onGesture(true);
+			if (this.draggedNode) {
+				this.handlers.onNodeDrag(this.draggedNode, graphPoint, "start");
+			} else {
+				this.handlers.onGesture(true);
+			}
 		} else if (this.pointers.size === 2) {
+			this.endNodeDrag();
 			const [a, b] = [...this.pointers.values()];
 			this.mode = "pinch";
 			this.pinchDistance = distance(a, b);
@@ -223,6 +235,12 @@ export class CanvasGestures {
 			this.velocity = { x: 0, y: 0 };
 		}
 	};
+
+	private endNodeDrag(point?: Point): void {
+		if (!this.draggedNode) return;
+		this.handlers.onNodeDrag(this.draggedNode, point ?? { x: 0, y: 0 }, "end");
+		this.draggedNode = null;
+	}
 
 	private onPointerMove = (event: PointerEvent): void => {
 		const previous = this.pointers.get(event.pointerId);
@@ -236,6 +254,12 @@ export class CanvasGestures {
 		}
 
 		this.pointers.set(event.pointerId, point);
+
+		if (this.mode === "node" && this.draggedNode) {
+			this.moved += Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
+			this.handlers.onNodeDrag(this.draggedNode, this.toGraph(point), "move");
+			return;
+		}
 
 		if (this.mode === "pan") {
 			const dx = point.x - previous.x;
@@ -290,15 +314,17 @@ export class CanvasGestures {
 		if (this.pointers.size > 0) return;
 
 		const wasTap =
-			this.mode === "pan" &&
+			this.mode !== "pinch" &&
 			this.moved <= TAP_MOVEMENT &&
 			performance.now() - this.tapStart <= TAP_DURATION;
+		const wasNodeDrag = this.mode === "node";
 
+		this.endNodeDrag(this.toGraph(point));
 		this.mode = "none";
 		this.handlers.onGesture(false);
 
 		if (wasTap) this.handlers.onTap(this.toGraph(point), event);
-		else this.startInertia();
+		else if (!wasNodeDrag) this.startInertia();
 	};
 
 	private onPointerLeave = (event: PointerEvent): void => {

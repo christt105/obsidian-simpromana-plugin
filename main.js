@@ -1181,6 +1181,239 @@ function projectFiles(app, settings) {
 // src/views/FlowCanvas.ts
 var import_obsidian6 = require("obsidian");
 
+// src/graph/force.ts
+var DEFAULT_FORCE_OPTIONS = {
+  charge: -1400,
+  linkStrength: 0.12,
+  anchorStrength: 0.06,
+  centreStrength: 0.04,
+  velocityDecay: 0.62,
+  alphaDecay: 0.022,
+  alphaMin: 8e-3,
+  padding: 26,
+  maxVelocity: 60
+};
+var COLLISION_PASSES = 4;
+var LINK_DISTANCE = {
+  dependency: 280,
+  continuation: 260,
+  related: 320,
+  mention: 360
+};
+var ForceSimulation = class {
+  constructor(layout, relations, options = DEFAULT_FORCE_OPTIONS) {
+    this.options = options;
+    this.nodes = [];
+    this.index = /* @__PURE__ */ new Map();
+    this.links = [];
+    this.alpha = 1;
+    this.centre = { x: 0, y: 0 };
+    for (const node of layout.nodes) {
+      const entry = {
+        path: node.record.path,
+        x: node.x + node.width / 2,
+        y: node.y + node.height / 2,
+        vx: 0,
+        vy: 0,
+        width: node.width,
+        height: node.height,
+        anchorX: node.unlinked ? null : node.x + node.width / 2,
+        fixed: false
+      };
+      this.nodes.push(entry);
+      this.index.set(entry.path, entry);
+    }
+    for (const relation of relations) {
+      const source = this.index.get(relation.from);
+      const target = this.index.get(relation.to);
+      if (!source || !target)
+        continue;
+      this.links.push({ source, target, distance: LINK_DISTANCE[relation.kind] });
+    }
+    if (this.nodes.length > 0) {
+      this.centre = {
+        x: this.nodes.reduce((sum, node) => sum + node.x, 0) / this.nodes.length,
+        y: this.nodes.reduce((sum, node) => sum + node.y, 0) / this.nodes.length
+      };
+    }
+  }
+  get running() {
+    return this.alpha > this.options.alphaMin;
+  }
+  get(path) {
+    return this.index.get(path);
+  }
+  reheat(alpha = 0.5) {
+    this.alpha = Math.max(this.alpha, alpha);
+  }
+  setAlpha(alpha) {
+    this.alpha = alpha;
+  }
+  pin(path, x, y) {
+    const node = this.index.get(path);
+    if (!node)
+      return;
+    node.fixed = true;
+    node.x = x;
+    node.y = y;
+    node.vx = 0;
+    node.vy = 0;
+  }
+  unpinAll() {
+    for (const node of this.nodes)
+      node.fixed = false;
+    this.reheat(0.6);
+  }
+  get pinnedCount() {
+    return this.nodes.filter((node) => node.fixed).length;
+  }
+  tick() {
+    if (!this.running)
+      return;
+    this.alpha *= 1 - this.options.alphaDecay;
+    this.applyLinks();
+    this.applyCharge();
+    this.applyAnchors();
+    this.integrate();
+    this.resolveCollisions();
+    this.recentre();
+  }
+  applyLinks() {
+    const strength = this.options.linkStrength * this.alpha;
+    for (const link of this.links) {
+      const dx = link.target.x - link.source.x;
+      const dy = link.target.y - link.source.y;
+      const spread = Math.max(1, Math.hypot(dx, dy));
+      const push = (spread - link.distance) / spread * strength;
+      const fx = dx * push;
+      const fy = dy * push;
+      link.source.vx += fx;
+      link.source.vy += fy;
+      link.target.vx -= fx;
+      link.target.vy -= fy;
+    }
+  }
+  applyCharge() {
+    const charge = this.options.charge * this.alpha;
+    for (let i = 0; i < this.nodes.length; i++) {
+      const a = this.nodes[i];
+      for (let j = i + 1; j < this.nodes.length; j++) {
+        const b = this.nodes[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let squared = dx * dx + dy * dy;
+        if (squared < 1) {
+          dx = i % 7 - 3;
+          dy = j % 7 - 3;
+          squared = Math.max(1, dx * dx + dy * dy);
+        }
+        const distance2 = Math.sqrt(squared);
+        const magnitude = charge / Math.max(squared, 400);
+        const fx = dx / distance2 * magnitude;
+        const fy = dy / distance2 * magnitude;
+        a.vx += fx;
+        a.vy += fy;
+        b.vx -= fx;
+        b.vy -= fy;
+      }
+    }
+  }
+  applyAnchors() {
+    const anchor = this.options.anchorStrength * this.alpha;
+    for (const node of this.nodes) {
+      if (node.anchorX === null)
+        continue;
+      node.vx += (node.anchorX - node.x) * anchor;
+    }
+  }
+  integrate() {
+    const { velocityDecay, maxVelocity } = this.options;
+    for (const node of this.nodes) {
+      if (node.fixed) {
+        node.vx = 0;
+        node.vy = 0;
+        continue;
+      }
+      node.vx = Math.max(-maxVelocity, Math.min(maxVelocity, node.vx * velocityDecay));
+      node.vy = Math.max(-maxVelocity, Math.min(maxVelocity, node.vy * velocityDecay));
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+  }
+  resolveCollisions() {
+    const padding = this.options.padding;
+    for (let pass = 0; pass < COLLISION_PASSES; pass++) {
+      let separated = 0;
+      for (let i = 0; i < this.nodes.length; i++) {
+        const a = this.nodes[i];
+        for (let j = i + 1; j < this.nodes.length; j++) {
+          const b = this.nodes[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const overlapX = (a.width + b.width) / 2 + padding - Math.abs(dx);
+          const overlapY = (a.height + b.height) / 2 + padding - Math.abs(dy);
+          if (overlapX <= 0 || overlapY <= 0)
+            continue;
+          separated++;
+          const movable = (a.fixed ? 0 : 1) + (b.fixed ? 0 : 1);
+          if (movable === 0)
+            continue;
+          const horizontal = overlapX < overlapY;
+          const overlap = horizontal ? overlapX : overlapY;
+          const direction = (horizontal ? dx : dy) >= 0 ? 1 : -1;
+          const shift = overlap * direction / movable;
+          if (horizontal) {
+            if (!a.fixed)
+              a.x -= shift;
+            if (!b.fixed)
+              b.x += shift;
+          } else {
+            if (!a.fixed)
+              a.y -= shift;
+            if (!b.fixed)
+              b.y += shift;
+          }
+        }
+      }
+      if (separated === 0)
+        return;
+    }
+  }
+  recentre() {
+    if (this.nodes.length === 0)
+      return;
+    let sumX = 0;
+    let sumY = 0;
+    for (const node of this.nodes) {
+      sumX += node.x;
+      sumY += node.y;
+    }
+    const shiftX = (this.centre.x - sumX / this.nodes.length) * this.options.centreStrength;
+    const shiftY = (this.centre.y - sumY / this.nodes.length) * this.options.centreStrength;
+    for (const node of this.nodes) {
+      if (node.fixed)
+        continue;
+      node.x += shiftX;
+      node.y += shiftY;
+    }
+  }
+  bounds() {
+    if (this.nodes.length === 0)
+      return { x: 0, y: 0, width: 0, height: 0 };
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of this.nodes) {
+      minX = Math.min(minX, node.x - node.width / 2);
+      minY = Math.min(minY, node.y - node.height / 2);
+      maxX = Math.max(maxX, node.x + node.width / 2);
+      maxY = Math.max(maxY, node.y + node.height / 2);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+};
+
 // src/views/CanvasGestures.ts
 var MIN_SCALE = 0.05;
 var MAX_SCALE = 3;
@@ -1203,6 +1436,7 @@ var CanvasGestures = class {
     this.transform = { x: 0, y: 0, k: 1 };
     this.pointers = /* @__PURE__ */ new Map();
     this.mode = "none";
+    this.draggedNode = null;
     this.pinchDistance = 0;
     this.pinchCentre = { x: 0, y: 0 };
     this.velocity = { x: 0, y: 0 };
@@ -1221,13 +1455,20 @@ var CanvasGestures = class {
       this.element.setPointerCapture(event.pointerId);
       this.pointers.set(event.pointerId, this.local(event));
       if (this.pointers.size === 1) {
-        this.mode = "pan";
+        const graphPoint = this.toGraph(this.local(event));
+        this.draggedNode = this.handlers.nodeAt(graphPoint);
+        this.mode = this.draggedNode ? "node" : "pan";
         this.moved = 0;
         this.tapStart = performance.now();
         this.lastMove = this.tapStart;
         this.velocity = { x: 0, y: 0 };
-        this.handlers.onGesture(true);
+        if (this.draggedNode) {
+          this.handlers.onNodeDrag(this.draggedNode, graphPoint, "start");
+        } else {
+          this.handlers.onGesture(true);
+        }
       } else if (this.pointers.size === 2) {
+        this.endNodeDrag();
         const [a, b] = [...this.pointers.values()];
         this.mode = "pinch";
         this.pinchDistance = distance(a, b);
@@ -1245,6 +1486,11 @@ var CanvasGestures = class {
         return;
       }
       this.pointers.set(event.pointerId, point);
+      if (this.mode === "node" && this.draggedNode) {
+        this.moved += Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
+        this.handlers.onNodeDrag(this.draggedNode, this.toGraph(point), "move");
+        return;
+      }
       if (this.mode === "pan") {
         const dx = point.x - previous.x;
         const dy = point.y - previous.y;
@@ -1294,12 +1540,14 @@ var CanvasGestures = class {
       }
       if (this.pointers.size > 0)
         return;
-      const wasTap = this.mode === "pan" && this.moved <= TAP_MOVEMENT && performance.now() - this.tapStart <= TAP_DURATION;
+      const wasTap = this.mode !== "pinch" && this.moved <= TAP_MOVEMENT && performance.now() - this.tapStart <= TAP_DURATION;
+      const wasNodeDrag = this.mode === "node";
+      this.endNodeDrag(this.toGraph(point));
       this.mode = "none";
       this.handlers.onGesture(false);
       if (wasTap)
         this.handlers.onTap(this.toGraph(point), event);
-      else
+      else if (!wasNodeDrag)
         this.startInertia();
     };
     this.onPointerLeave = (event) => {
@@ -1392,19 +1640,19 @@ var CanvasGestures = class {
     const anchor = { x: bounds.width / 2, y: bounds.height / 2 };
     this.moveTo(this.scaled(factor, anchor), animate);
   }
-  fit(width, height, padding, animate) {
+  fit(area, padding, animate) {
     const bounds = this.bounds;
     const scale = Math.min(
-      (bounds.width - padding * 2) / Math.max(width, 1),
-      (bounds.height - padding * 2) / Math.max(height, 1),
+      (bounds.width - padding * 2) / Math.max(area.width, 1),
+      (bounds.height - padding * 2) / Math.max(area.height, 1),
       1
     );
     const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
     this.moveTo(
       {
         k,
-        x: (bounds.width - width * k) / 2,
-        y: (bounds.height - height * k) / 2
+        x: (bounds.width - area.width * k) / 2 - area.x * k,
+        y: (bounds.height - area.height * k) / 2 - area.y * k
       },
       animate
     );
@@ -1458,6 +1706,12 @@ var CanvasGestures = class {
     };
     this.inertiaFrame = requestAnimationFrame(step);
   }
+  endNodeDrag(point) {
+    if (!this.draggedNode)
+      return;
+    this.handlers.onNodeDrag(this.draggedNode, point != null ? point : { x: 0, y: 0 }, "end");
+    this.draggedNode = null;
+  }
 };
 
 // src/views/FlowCanvas.ts
@@ -1481,6 +1735,16 @@ function curveBetween(from, to) {
   const offset = Math.max(20, Math.abs(dy) * 0.4);
   const direction = dy >= 0 ? 1 : -1;
   return `M ${from.x} ${from.y} C ${from.x} ${from.y + offset * direction}, ${to.x} ${to.y - offset * direction}, ${to.x} ${to.y}`;
+}
+function borderPoint(node, towards) {
+  const dx = towards.x - node.x;
+  const dy = towards.y - node.y;
+  if (dx === 0 && dy === 0)
+    return { x: node.x, y: node.y };
+  const scaleX = dx === 0 ? Infinity : node.width / 2 / Math.abs(dx);
+  const scaleY = dy === 0 ? Infinity : node.height / 2 / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+  return { x: node.x + dx * scale, y: node.y + dy * scale };
 }
 function isUndirected(edge) {
   return edge.relation.kind === "related" || edge.relation.kind === "mention";
@@ -1515,6 +1779,10 @@ var FlowCanvas = class {
     this.hitAreas = [];
     this.hovered = null;
     this.pendingFit = false;
+    this.mode = "flow";
+    this.simulation = null;
+    this.simulationFrame = 0;
+    this.grabOffset = { x: 0, y: 0 };
     this.svg = svgEl("svg", { class: "spm-flow-svg" });
     this.svg.appendChild(this.buildDefs());
     this.viewport = svgEl("g", { class: "spm-flow-viewport" });
@@ -1529,7 +1797,9 @@ var FlowCanvas = class {
       onTap: (point, event) => this.onTap(point, event),
       onHover: (point) => this.onHover(point),
       onGesture: (active) => this.svg.toggleClass("is-panning", active),
-      onDoubleClick: (point) => this.onDoubleClick(point)
+      onDoubleClick: (point) => this.onDoubleClick(point),
+      nodeAt: (point) => this.mode === "force" ? this.hitTest(point) : null,
+      onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase)
     });
     this.observer = new ResizeObserver(() => {
       this.gestures.invalidateBounds();
@@ -1539,22 +1809,26 @@ var FlowCanvas = class {
     this.observer.observe(this.container);
   }
   destroy() {
+    this.stopSimulation();
     this.observer.disconnect();
     this.gestures.destroy();
     this.svg.remove();
   }
   render(layout, options) {
     this.layout = layout;
+    this.mode = options.mode;
     this.edgeLayer.empty();
     this.edgeElements = [];
     this.neighbours.clear();
     this.hitAreas = [];
     this.hovered = null;
-    if (layout.unlinkedTop !== null) {
-      this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
-    }
-    for (const group of layout.groups) {
-      this.edgeLayer.appendChild(this.buildGroupHeader(group));
+    if (this.mode === "flow") {
+      if (layout.unlinkedTop !== null) {
+        this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
+      }
+      for (const group of layout.groups) {
+        this.edgeLayer.appendChild(this.buildGroupHeader(group));
+      }
     }
     for (const edge of layout.edges) {
       this.edgeLayer.appendChild(this.buildEdge(edge));
@@ -1574,6 +1848,7 @@ var FlowCanvas = class {
     }
     for (const orphan of previous.values())
       orphan.remove();
+    this.setupSimulation(layout, options.relations);
     if (options.fit)
       this.fit(false);
   }
@@ -1587,7 +1862,104 @@ var FlowCanvas = class {
       return;
     }
     this.pendingFit = false;
-    this.gestures.fit(layout.width, layout.height, FIT_PADDING, animate);
+    const area = this.simulation && this.mode === "force" ? this.simulation.bounds() : { x: 0, y: 0, width: layout.width, height: layout.height };
+    this.gestures.fit(area, FIT_PADDING, animate);
+  }
+  unpinAll() {
+    if (!this.simulation)
+      return;
+    this.simulation.unpinAll();
+    this.startSimulation();
+  }
+  get pinnedCount() {
+    var _a, _b;
+    return (_b = (_a = this.simulation) == null ? void 0 : _a.pinnedCount) != null ? _b : 0;
+  }
+  setupSimulation(layout, relations) {
+    this.stopSimulation();
+    if (this.mode !== "force") {
+      this.simulation = null;
+      this.nodeLayer.removeClass("is-simulating");
+      return;
+    }
+    const previous = this.simulation;
+    const simulation = new ForceSimulation(layout, relations);
+    let carriedNodes = 0;
+    for (const node of simulation.nodes) {
+      const carried = previous == null ? void 0 : previous.get(node.path);
+      if (!carried)
+        continue;
+      node.x = carried.x;
+      node.y = carried.y;
+      node.fixed = carried.fixed;
+      carriedNodes++;
+    }
+    if (carriedNodes > 0)
+      simulation.setAlpha(0.35);
+    this.simulation = simulation;
+    this.nodeLayer.addClass("is-simulating");
+    this.startSimulation();
+  }
+  startSimulation() {
+    if (!this.simulation || this.simulationFrame)
+      return;
+    const step = () => {
+      const simulation = this.simulation;
+      if (!simulation) {
+        this.simulationFrame = 0;
+        return;
+      }
+      simulation.tick();
+      this.updateSimulatedPositions();
+      this.simulationFrame = simulation.running ? requestAnimationFrame(step) : 0;
+    };
+    this.simulationFrame = requestAnimationFrame(step);
+  }
+  stopSimulation() {
+    if (this.simulationFrame)
+      cancelAnimationFrame(this.simulationFrame);
+    this.simulationFrame = 0;
+  }
+  updateSimulatedPositions() {
+    const simulation = this.simulation;
+    if (!simulation)
+      return;
+    this.hitAreas = [];
+    for (const node of simulation.nodes) {
+      const element = this.nodeElements.get(node.path);
+      const x = node.x - node.width / 2;
+      const y = node.y - node.height / 2;
+      element == null ? void 0 : element.setAttribute("transform", `translate(${x} ${y})`);
+      this.hitAreas.push({ path: node.path, x, y, width: node.width, height: node.height });
+    }
+    for (const edge of this.edgeElements) {
+      const from = simulation.get(edge.from);
+      const to = simulation.get(edge.to);
+      if (!from || !to)
+        continue;
+      edge.element.setAttribute(
+        "d",
+        curveBetween(borderPoint(from, to), borderPoint(to, from))
+      );
+    }
+  }
+  onNodeDrag(path, point, phase) {
+    const simulation = this.simulation;
+    const node = simulation == null ? void 0 : simulation.get(path);
+    if (!simulation || !node)
+      return;
+    if (phase === "start") {
+      this.grabOffset = { x: node.x - point.x, y: node.y - point.y };
+      simulation.pin(path, node.x, node.y);
+      simulation.reheat(0.3);
+      this.startSimulation();
+      return;
+    }
+    if (phase === "move") {
+      simulation.pin(path, point.x + this.grabOffset.x, point.y + this.grabOffset.y);
+      simulation.reheat(0.3);
+      this.startSimulation();
+    }
   }
   zoomBy(factor) {
     this.gestures.zoomBy(factor);
@@ -1792,6 +2164,10 @@ var LEGEND = [
   { kind: "related", label: RELATION_LABELS.related },
   { kind: "mention", label: RELATION_LABELS.mention }
 ];
+var MODE_LABELS = {
+  flow: "Flow layout",
+  force: "Force graph"
+};
 var FlowView = class extends import_obsidian7.ItemView {
   constructor(leaf, settings) {
     super(leaf);
@@ -1802,6 +2178,7 @@ var FlowView = class extends import_obsidian7.ItemView {
     this.mentions = true;
     this.references = false;
     this.grouping = "status";
+    this.mode = "flow";
     this.toggles = /* @__PURE__ */ new Map();
     this.canvas = null;
   }
@@ -1858,7 +2235,8 @@ var FlowView = class extends import_obsidian7.ItemView {
       showUnlinked: this.showUnlinked,
       mentions: this.mentions,
       references: this.references,
-      grouping: this.grouping
+      grouping: this.grouping,
+      mode: this.mode
     };
   }
   async setState(state, result) {
@@ -1875,6 +2253,8 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.references = next.references;
     if (typeof next.grouping === "string")
       this.grouping = next.grouping;
+    if (next.mode === "flow" || next.mode === "force")
+      this.mode = next.mode;
     await super.setState(state, result);
     if (this.canvas)
       this.render(true);
@@ -1892,6 +2272,16 @@ var FlowView = class extends import_obsidian7.ItemView {
     this.toggles.set(key, button);
   }
   buildToolbar(toolbar) {
+    this.modeSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-mode" });
+    for (const [mode, label] of Object.entries(MODE_LABELS)) {
+      this.modeSelect.createEl("option", { value: mode, text: label });
+    }
+    this.modeSelect.value = this.mode;
+    this.modeSelect.addEventListener("change", () => {
+      this.mode = this.modeSelect.value;
+      this.app.workspace.requestSaveLayout();
+      this.render(true);
+    });
     this.projectSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-project" });
     this.projectSelect.addEventListener("change", () => {
       this.projectPath = this.projectSelect.value || null;
@@ -1911,6 +2301,12 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.grouping = this.groupingSelect.value;
       this.app.workspace.requestSaveLayout();
       this.render(true);
+    });
+    this.unpinButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Unpin" });
+    this.unpinButton.addEventListener("click", () => {
+      var _a;
+      (_a = this.canvas) == null ? void 0 : _a.unpinAll();
+      this.unpinButton.hide();
     });
     const zoomOut = toolbar.createEl("button", { cls: "clickable-icon" });
     (0, import_obsidian7.setIcon)(zoomOut, "zoom-out");
@@ -1984,7 +2380,9 @@ var FlowView = class extends import_obsidian7.ItemView {
     (_c = this.toggles.get("references")) == null ? void 0 : _c.toggleClass("is-active", this.references);
     (_d = this.toggles.get("unlinked")) == null ? void 0 : _d.toggleClass("is-active", this.showUnlinked);
     (_e = this.toggles.get("unlinked")) == null ? void 0 : _e.setText(`Unlinked (${unlinkedCount})`);
-    this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked);
+    this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked || this.mode === "force");
+    this.modeSelect.value = this.mode;
+    this.unpinButton.toggle(this.mode === "force");
     this.warningEl.empty();
     const unresolved = scoped.unresolved.filter((entry) => entry.kind !== "mention");
     if (unresolved.length > 0) {
@@ -1994,7 +2392,7 @@ var FlowView = class extends import_obsidian7.ItemView {
     }
     this.canvas.render(
       layoutGraph(scoped, { ...DEFAULT_LAYOUT_OPTIONS, grouping: this.grouping }),
-      { fit }
+      { fit, mode: this.mode, relations: scoped.relations }
     );
     this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
   }
