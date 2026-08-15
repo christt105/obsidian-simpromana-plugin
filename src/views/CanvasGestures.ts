@@ -57,7 +57,7 @@ export class CanvasGestures {
 	private renderFrame = 0;
 	private rect: DOMRect | null = null;
 	private rectTime = 0;
-	private longPress = 0;
+	private longPress: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(private element: SVGSVGElement, private handlers: GestureHandlers) {
 		element.addEventListener("wheel", this.onWheel, { passive: false });
@@ -360,14 +360,14 @@ export class CanvasGestures {
 	};
 
 	private cancelLongPress(): void {
-		if (this.longPress) clearTimeout(this.longPress);
-		this.longPress = 0;
+		if (this.longPress !== null) clearTimeout(this.longPress);
+		this.longPress = null;
 	}
 
 	private armLongPress(point: Point): void {
 		this.cancelLongPress();
 		this.longPress = setTimeout(() => {
-			this.longPress = 0;
+			this.longPress = null;
 			this.endNodeDrag(this.toGraph(point));
 			this.mode = "none";
 			this.pointers.clear();

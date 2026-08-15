@@ -559,6 +559,34 @@ function dropNodes(graph, shouldDrop) {
     external: new Set([...graph.external].filter((path) => kept.has(path)))
   };
 }
+function collapseHubs(graph, limit) {
+  var _a, _b;
+  const hidden = /* @__PURE__ */ new Map();
+  if (limit <= 0)
+    return { graph, hidden };
+  const degree = /* @__PURE__ */ new Map();
+  for (const relation of graph.relations) {
+    degree.set(relation.from, ((_a = degree.get(relation.from)) != null ? _a : 0) + 1);
+    degree.set(relation.to, ((_b = degree.get(relation.to)) != null ? _b : 0) + 1);
+  }
+  const hubs = new Set(
+    [...degree].filter(([, count]) => count > limit).map(([path]) => path)
+  );
+  if (hubs.size === 0)
+    return { graph, hidden };
+  const relations = graph.relations.filter((relation) => {
+    var _a2;
+    if (relation.kind !== "mention")
+      return true;
+    const ends = [relation.from, relation.to].filter((path) => hubs.has(path));
+    if (ends.length === 0)
+      return true;
+    for (const path of ends)
+      hidden.set(path, ((_a2 = hidden.get(path)) != null ? _a2 : 0) + 1);
+    return false;
+  });
+  return { graph: { ...graph, relations }, hidden };
+}
 function connectedPaths(graph) {
   const connected = /* @__PURE__ */ new Set();
   for (const relation of graph.relations) {
@@ -1543,6 +1571,7 @@ var FRICTION = 0.93;
 var MIN_VELOCITY = 0.03;
 var RECT_TTL = 250;
 var ANIMATION_MS = 260;
+var LONG_PRESS_MS = 550;
 function distance(a, b) {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
@@ -1568,6 +1597,7 @@ var CanvasGestures = class {
     this.renderFrame = 0;
     this.rect = null;
     this.rectTime = 0;
+    this.longPress = null;
     this.onPointerDown = (event) => {
       if (event.button !== 0 && event.button !== 1)
         return;
@@ -1587,7 +1617,10 @@ var CanvasGestures = class {
         } else {
           this.handlers.onGesture(true);
         }
+        if (event.pointerType !== "mouse")
+          this.armLongPress(this.local(event));
       } else if (this.pointers.size === 2) {
+        this.cancelLongPress();
         this.endNodeDrag();
         const [a, b] = [...this.pointers.values()];
         this.mode = "pinch";
@@ -1608,6 +1641,8 @@ var CanvasGestures = class {
       this.pointers.set(event.pointerId, point);
       if (this.mode === "node" && this.draggedNode) {
         this.moved += Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
+        if (this.moved > TAP_MOVEMENT)
+          this.cancelLongPress();
         this.handlers.onNodeDrag(this.draggedNode, this.toGraph(point), "move");
         return;
       }
@@ -1618,6 +1653,8 @@ var CanvasGestures = class {
         const elapsed = Math.max(1, now - this.lastMove);
         this.lastMove = now;
         this.moved += Math.abs(dx) + Math.abs(dy);
+        if (this.moved > TAP_MOVEMENT)
+          this.cancelLongPress();
         this.velocity = {
           x: this.velocity.x * 0.3 + dx / elapsed * 0.7,
           y: this.velocity.y * 0.3 + dy / elapsed * 0.7
@@ -1642,6 +1679,7 @@ var CanvasGestures = class {
       }
     };
     this.onPointerUp = (event) => {
+      this.cancelLongPress();
       if (!this.pointers.has(event.pointerId))
         return;
       const point = this.local(event);
@@ -1681,6 +1719,12 @@ var CanvasGestures = class {
       this.transform = this.scaled(Math.pow(0.999, event.deltaY), this.local(event));
       this.schedule();
     };
+    this.onContextMenu = (event) => {
+      event.preventDefault();
+      this.cancelLongPress();
+      const point = this.local(event);
+      this.handlers.onContextMenu(this.toGraph(point), { x: event.clientX, y: event.clientY });
+    };
     this.onDoubleClick = (event) => {
       event.preventDefault();
       this.handlers.onDoubleClick(this.toGraph(this.local(event)));
@@ -1699,6 +1743,7 @@ var CanvasGestures = class {
     element.addEventListener("pointercancel", this.onPointerUp);
     element.addEventListener("pointerleave", this.onPointerLeave);
     element.addEventListener("dblclick", this.onDoubleClick);
+    element.addEventListener("contextmenu", this.onContextMenu);
     element.addEventListener("touchstart", this.onTouchStart, { passive: false });
     element.addEventListener("touchmove", this.onTouchMove, { passive: false });
   }
@@ -1713,6 +1758,8 @@ var CanvasGestures = class {
     this.element.removeEventListener("pointercancel", this.onPointerUp);
     this.element.removeEventListener("pointerleave", this.onPointerLeave);
     this.element.removeEventListener("dblclick", this.onDoubleClick);
+    this.element.removeEventListener("contextmenu", this.onContextMenu);
+    this.cancelLongPress();
     this.element.removeEventListener("touchstart", this.onTouchStart);
     this.element.removeEventListener("touchmove", this.onTouchMove);
   }
@@ -1839,6 +1886,22 @@ var CanvasGestures = class {
     this.handlers.onNodeDrag(this.draggedNode, point != null ? point : { x: 0, y: 0 }, "end");
     this.draggedNode = null;
   }
+  cancelLongPress() {
+    if (this.longPress !== null)
+      clearTimeout(this.longPress);
+    this.longPress = null;
+  }
+  armLongPress(point) {
+    this.cancelLongPress();
+    this.longPress = setTimeout(() => {
+      this.longPress = null;
+      this.endNodeDrag(this.toGraph(point));
+      this.mode = "none";
+      this.pointers.clear();
+      this.handlers.onGesture(false);
+      this.handlers.onContextMenu(this.toGraph(point), this.toClient(this.toGraph(point)));
+    }, LONG_PRESS_MS);
+  }
 };
 
 // src/views/FlowCanvas.ts
@@ -1930,7 +1993,8 @@ var FlowCanvas = class {
       onGesture: (active) => this.svg.toggleClass("is-panning", active),
       onDoubleClick: (point) => this.onDoubleClick(point),
       nodeAt: (point) => this.mode === "force" || this.connecting ? this.hitTest(point) : null,
-      onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase)
+      onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
+      onContextMenu: (point, client) => this.handlers.onMenu(this.hitTest(point), client)
     });
     this.observer = new ResizeObserver(() => {
       this.gestures.invalidateBounds();
@@ -2281,6 +2345,12 @@ var FlowCanvas = class {
     if (record.external && record.projectName) {
       meta.createSpan({ cls: "spm-flow-chip", text: record.projectName });
     }
+    if (record.hiddenMentions) {
+      meta.createSpan({
+        cls: "spm-flow-chip is-collapsed",
+        text: `+${record.hiddenMentions} mentions`
+      });
+    }
     holder.appendChild(card);
     group.appendChild(holder);
     (0, import_obsidian7.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
@@ -2344,6 +2414,12 @@ var LEGEND = [
   { kind: "related", label: RELATION_LABELS.related },
   { kind: "mention", label: RELATION_LABELS.mention }
 ];
+var HUB_LIMITS = [
+  { value: 0, label: "Keep every mention" },
+  { value: 8, label: "Collapse hubs over 8" },
+  { value: 12, label: "Collapse hubs over 12" },
+  { value: 20, label: "Collapse hubs over 20" }
+];
 var MODE_LABELS = {
   flow: "Flow layout",
   force: "Force graph"
@@ -2359,6 +2435,8 @@ var FlowView = class extends import_obsidian8.ItemView {
     this.references = false;
     this.grouping = "status";
     this.mode = "flow";
+    this.hubLimit = 12;
+    this.hiddenByProject = {};
     this.toggles = /* @__PURE__ */ new Map();
     this.canvas = null;
     this.connecting = false;
@@ -2382,7 +2460,8 @@ var FlowView = class extends import_obsidian8.ItemView {
     this.emptyEl = this.canvasEl.createDiv({ cls: "spm-flow-empty" });
     this.canvas = new FlowCanvas(this.canvasEl, {
       onOpenTask: (path, event) => this.openTask(path, event),
-      onConnect: (from, to, client) => this.offerRelation(from, to, client)
+      onConnect: (from, to, client) => this.offerRelation(from, to, client),
+      onMenu: (path, client) => this.showMenu(path, client)
     });
     const refresh = (0, import_obsidian8.debounce)(() => this.render(false), 400, true);
     this.registerEvent(
@@ -2419,8 +2498,24 @@ var FlowView = class extends import_obsidian8.ItemView {
       mentions: this.mentions,
       references: this.references,
       grouping: this.grouping,
-      mode: this.mode
+      mode: this.mode,
+      hubLimit: this.hubLimit,
+      hiddenByProject: this.hiddenByProject
     };
+  }
+  get hidden() {
+    var _a;
+    return this.projectPath ? (_a = this.hiddenByProject[this.projectPath]) != null ? _a : [] : [];
+  }
+  setHidden(paths) {
+    if (!this.projectPath)
+      return;
+    if (paths.length > 0)
+      this.hiddenByProject[this.projectPath] = paths;
+    else
+      delete this.hiddenByProject[this.projectPath];
+    this.app.workspace.requestSaveLayout();
+    this.render(false);
   }
   async setState(state, result) {
     const next = state != null ? state : {};
@@ -2438,6 +2533,11 @@ var FlowView = class extends import_obsidian8.ItemView {
       this.grouping = next.grouping;
     if (next.mode === "flow" || next.mode === "force")
       this.mode = next.mode;
+    if (typeof next.hubLimit === "number")
+      this.hubLimit = next.hubLimit;
+    if (next.hiddenByProject && typeof next.hiddenByProject === "object") {
+      this.hiddenByProject = next.hiddenByProject;
+    }
     await super.setState(state, result);
     if (this.canvas)
       this.render(true);
@@ -2475,6 +2575,18 @@ var FlowView = class extends import_obsidian8.ItemView {
     this.addToggle(toolbar, "mentions", "Mentions", () => this.mentions, (value) => this.mentions = value);
     this.addToggle(toolbar, "references", "References", () => this.references, (value) => this.references = value);
     this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => this.showUnlinked = value);
+    this.hubSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-hubs" });
+    for (const limit of HUB_LIMITS) {
+      this.hubSelect.createEl("option", { value: String(limit.value), text: limit.label });
+    }
+    this.hubSelect.value = String(this.hubLimit);
+    this.hubSelect.addEventListener("change", () => {
+      this.hubLimit = Number(this.hubSelect.value);
+      this.app.workspace.requestSaveLayout();
+      this.render(true);
+    });
+    this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
+    this.hiddenButton.addEventListener("click", () => this.setHidden([]));
     this.groupingSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-grouping" });
     for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
       this.groupingSelect.createEl("option", { value: mode, text: `Group by ${label.toLowerCase()}` });
@@ -2563,6 +2675,14 @@ var FlowView = class extends import_obsidian8.ItemView {
     if (this.hideDone) {
       scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
     }
+    const hidden = new Set(this.hidden);
+    if (hidden.size > 0)
+      scoped = dropNodes(scoped, (record) => hidden.has(record.path));
+    const collapsed = collapseHubs(scoped, this.hubLimit);
+    scoped = collapsed.graph;
+    for (const record of scoped.nodes) {
+      record.hiddenMentions = collapsed.hidden.get(record.path);
+    }
     this.graph = scoped;
     const connected = connectedPaths(scoped);
     const unlinkedCount = scoped.nodes.filter((record) => !connected.has(record.path)).length;
@@ -2576,7 +2696,10 @@ var FlowView = class extends import_obsidian8.ItemView {
     (_e = this.toggles.get("unlinked")) == null ? void 0 : _e.setText(`Unlinked (${unlinkedCount})`);
     this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked || this.mode === "force");
     this.modeSelect.value = this.mode;
+    this.hubSelect.value = String(this.hubLimit);
     this.unpinButton.toggle(this.mode === "force");
+    this.hiddenButton.toggle(hidden.size > 0);
+    this.hiddenButton.setText(`Show ${hidden.size} hidden`);
     this.warningEl.empty();
     const unresolved = scoped.unresolved.filter((entry) => entry.kind !== "mention");
     if (unresolved.length > 0) {
@@ -2606,6 +2729,42 @@ var FlowView = class extends import_obsidian8.ItemView {
     } else {
       this.emptyEl.setText("No tasks in this project yet.");
     }
+  }
+  showMenu(path, client) {
+    const menu = new import_obsidian8.Menu();
+    const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
+    if (record) {
+      menu.addItem(
+        (item) => item.setTitle("Open").setIcon("file-text").onClick(() => {
+          const file = this.app.vault.getAbstractFileByPath(record.path);
+          if (file instanceof import_obsidian8.TFile)
+            this.app.workspace.getLeaf(false).openFile(file);
+        })
+      );
+      menu.addItem(
+        (item) => item.setTitle("Hide this card").setIcon("eye-off").onClick(() => this.setHidden([...this.hidden, record.path]))
+      );
+      menu.addSeparator();
+    }
+    const hiddenCount = this.hidden.length;
+    menu.addItem(
+      (item) => item.setTitle(hiddenCount > 0 ? `Show ${hiddenCount} hidden card(s)` : "Nothing hidden").setIcon("eye").setDisabled(hiddenCount === 0).onClick(() => this.setHidden([]))
+    );
+    menu.addItem(
+      (item) => item.setTitle("Fit to screen").setIcon("maximize").onClick(() => {
+        var _a;
+        return (_a = this.canvas) == null ? void 0 : _a.fit();
+      })
+    );
+    if (this.mode === "force") {
+      menu.addItem(
+        (item) => item.setTitle("Release pinned nodes").setIcon("pin-off").onClick(() => {
+          var _a;
+          return (_a = this.canvas) == null ? void 0 : _a.unpinAll();
+        })
+      );
+    }
+    menu.showAtPosition(client);
   }
   offerRelation(fromPath, toPath, client) {
     const from = this.graph.nodes.find((record) => record.path === fromPath);
