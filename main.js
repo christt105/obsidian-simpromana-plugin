@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => SimpromanaPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian8 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -413,7 +413,7 @@ async function setupBases(app, s) {
 }
 
 // src/views/FlowView.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/graph/relations.ts
 var RELATION_KEYS = {
@@ -427,6 +427,12 @@ var RELATION_KEYS = {
   follows: { kind: "continuation", inverted: true },
   related: { kind: "related", inverted: false },
   relatedto: { kind: "related", inverted: false }
+};
+var CANONICAL_RELATION_KEYS = {
+  dependency: "blocked_by",
+  continuation: "continues",
+  related: "related",
+  mention: ""
 };
 var RELATION_LABELS = {
   dependency: "Blocks",
@@ -566,6 +572,79 @@ function connectedPaths(graph) {
 var ORDERING_KINDS = ["dependency", "continuation"];
 function isOrderingKind(kind) {
   return ORDERING_KINDS.includes(kind);
+}
+
+// src/graph/validate.ts
+function reaches(graph, from, to) {
+  var _a;
+  const outgoing = /* @__PURE__ */ new Map();
+  for (const relation of graph.relations) {
+    if (!isOrderingKind(relation.kind))
+      continue;
+    const list = outgoing.get(relation.from);
+    if (list)
+      list.push(relation.to);
+    else
+      outgoing.set(relation.from, [relation.to]);
+  }
+  const seen = /* @__PURE__ */ new Set([from]);
+  const queue = [from];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === to)
+      return true;
+    for (const next of (_a = outgoing.get(current)) != null ? _a : []) {
+      if (seen.has(next))
+        continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  return false;
+}
+function rejectionReason(graph, draft) {
+  if (draft.from.path === draft.to.path)
+    return "A task cannot relate to itself.";
+  const existing = graph.relations.find(
+    (relation) => relation.kind !== "mention" && (relation.from === draft.from.path && relation.to === draft.to.path || relation.from === draft.to.path && relation.to === draft.from.path)
+  );
+  if (existing)
+    return "These tasks are already related.";
+  if (isOrderingKind(draft.kind) && reaches(graph, draft.to.path, draft.from.path)) {
+    return "That would close a dependency cycle.";
+  }
+  return null;
+}
+
+// src/lib/relations.ts
+var import_obsidian6 = require("obsidian");
+function declaration(draft) {
+  return draft.kind === "related" ? { owner: draft.from, target: draft.to } : { owner: draft.to, target: draft.from };
+}
+function wikilink(file) {
+  return `[[${file.path.replace(/\.md$/, "")}]]`;
+}
+async function writeRelation(app, draft) {
+  const { owner, target } = declaration(draft);
+  const file = app.vault.getAbstractFileByPath(owner.path);
+  const targetFile = app.vault.getAbstractFileByPath(target.path);
+  if (!(file instanceof import_obsidian6.TFile) || !(targetFile instanceof import_obsidian6.TFile)) {
+    throw new Error("Task file not found.");
+  }
+  const key = CANONICAL_RELATION_KEYS[draft.kind];
+  const link = wikilink(targetFile);
+  await app.fileManager.processFrontMatter(file, (frontmatter) => {
+    const current = frontmatter[key];
+    const values = Array.isArray(current) ? [...current] : current ? [current] : [];
+    const already = values.some((value) => {
+      const parsed = parseLinkTarget(value);
+      return parsed !== null && parsed.split("/").pop() === targetFile.basename;
+    });
+    if (already)
+      return;
+    values.push(link);
+    frontmatter[key] = values;
+  });
 }
 
 // src/graph/grouping.ts
@@ -1179,7 +1258,7 @@ function projectFiles(app, settings) {
 }
 
 // src/views/FlowCanvas.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/graph/force.ts
 var DEFAULT_FORCE_OPTIONS = {
@@ -1613,6 +1692,13 @@ var CanvasGestures = class {
       y: (point.y - this.transform.y) / this.transform.k
     };
   }
+  toClient(point) {
+    const bounds = this.bounds;
+    return {
+      x: point.x * this.transform.k + this.transform.x + bounds.left,
+      y: point.y * this.transform.k + this.transform.y + bounds.top
+    };
+  }
   moveTo(target, animate) {
     this.stopMotion();
     if (!animate) {
@@ -1783,6 +1869,10 @@ var FlowCanvas = class {
     this.simulation = null;
     this.simulationFrame = 0;
     this.grabOffset = { x: 0, y: 0 };
+    this.connecting = false;
+    this.connectFrom = null;
+    this.ghost = null;
+    this.dropTarget = null;
     this.svg = svgEl("svg", { class: "spm-flow-svg" });
     this.svg.appendChild(this.buildDefs());
     this.viewport = svgEl("g", { class: "spm-flow-viewport" });
@@ -1798,7 +1888,7 @@ var FlowCanvas = class {
       onHover: (point) => this.onHover(point),
       onGesture: (active) => this.svg.toggleClass("is-panning", active),
       onDoubleClick: (point) => this.onDoubleClick(point),
-      nodeAt: (point) => this.mode === "force" ? this.hitTest(point) : null,
+      nodeAt: (point) => this.mode === "force" || this.connecting ? this.hitTest(point) : null,
       onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase)
     });
     this.observer = new ResizeObserver(() => {
@@ -1943,7 +2033,56 @@ var FlowCanvas = class {
       );
     }
   }
+  setConnecting(connecting) {
+    this.connecting = connecting;
+    this.svg.toggleClass("is-connecting", connecting);
+  }
+  nodeCentre(path) {
+    const area = this.hitAreas.find((entry) => entry.path === path);
+    return area ? { x: area.x + area.width / 2, y: area.y + area.height / 2 } : null;
+  }
+  markDropTarget(path) {
+    var _a, _b;
+    if (path === this.dropTarget)
+      return;
+    if (this.dropTarget)
+      (_a = this.nodeElements.get(this.dropTarget)) == null ? void 0 : _a.removeClass("is-drop-target");
+    if (path)
+      (_b = this.nodeElements.get(path)) == null ? void 0 : _b.addClass("is-drop-target");
+    this.dropTarget = path;
+  }
+  onConnectDrag(path, point, phase) {
+    var _a, _b;
+    if (phase === "start") {
+      this.connectFrom = path;
+      this.ghost = svgEl("path", { class: "spm-flow-edge is-ghost" });
+      this.edgeLayer.appendChild(this.ghost);
+      return;
+    }
+    const from = this.connectFrom ? this.nodeCentre(this.connectFrom) : null;
+    if (!from || !this.connectFrom)
+      return;
+    if (phase === "move") {
+      const target2 = this.hitTest(point);
+      this.markDropTarget(target2 === this.connectFrom ? null : target2);
+      (_a = this.ghost) == null ? void 0 : _a.setAttribute("d", curveBetween(from, point));
+      return;
+    }
+    const target = this.hitTest(point);
+    const source = this.connectFrom;
+    (_b = this.ghost) == null ? void 0 : _b.remove();
+    this.ghost = null;
+    this.connectFrom = null;
+    this.markDropTarget(null);
+    if (target && target !== source) {
+      this.handlers.onConnect(source, target, this.gestures.toClient(point));
+    }
+  }
   onNodeDrag(path, point, phase) {
+    if (this.connecting) {
+      this.onConnectDrag(path, point, phase);
+      return;
+    }
     const simulation = this.simulation;
     const node = simulation == null ? void 0 : simulation.get(path);
     if (!simulation || !node)
@@ -2103,7 +2242,7 @@ var FlowCanvas = class {
     }
     holder.appendChild(card);
     group.appendChild(holder);
-    (0, import_obsidian6.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
+    (0, import_obsidian7.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
     return group;
   }
   tooltipFor(node) {
@@ -2168,7 +2307,7 @@ var MODE_LABELS = {
   flow: "Flow layout",
   force: "Force graph"
 };
-var FlowView = class extends import_obsidian7.ItemView {
+var FlowView = class extends import_obsidian8.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -2181,6 +2320,8 @@ var FlowView = class extends import_obsidian7.ItemView {
     this.mode = "flow";
     this.toggles = /* @__PURE__ */ new Map();
     this.canvas = null;
+    this.connecting = false;
+    this.graph = { nodes: [], relations: [], unresolved: [] };
   }
   getViewType() {
     return FLOW_VIEW_TYPE;
@@ -2199,9 +2340,10 @@ var FlowView = class extends import_obsidian7.ItemView {
     this.canvasEl = root.createDiv({ cls: "spm-flow-canvas" });
     this.emptyEl = this.canvasEl.createDiv({ cls: "spm-flow-empty" });
     this.canvas = new FlowCanvas(this.canvasEl, {
-      onOpenTask: (path, event) => this.openTask(path, event)
+      onOpenTask: (path, event) => this.openTask(path, event),
+      onConnect: (from, to, client) => this.offerRelation(from, to, client)
     });
-    const refresh = (0, import_obsidian7.debounce)(() => this.render(false), 400, true);
+    const refresh = (0, import_obsidian8.debounce)(() => this.render(false), 400, true);
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (this.isRelevant(file.path))
@@ -2302,6 +2444,16 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.app.workspace.requestSaveLayout();
       this.render(true);
     });
+    this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
+    this.connectButton.addEventListener("click", () => {
+      var _a;
+      this.connecting = !this.connecting;
+      (_a = this.canvas) == null ? void 0 : _a.setConnecting(this.connecting);
+      this.connectButton.toggleClass("is-active", this.connecting);
+      new import_obsidian8.Notice(
+        this.connecting ? "Drag from one task to another to relate them." : "Connect mode off."
+      );
+    });
     this.unpinButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Unpin" });
     this.unpinButton.addEventListener("click", () => {
       var _a;
@@ -2309,19 +2461,19 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.unpinButton.hide();
     });
     const zoomOut = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian7.setIcon)(zoomOut, "zoom-out");
+    (0, import_obsidian8.setIcon)(zoomOut, "zoom-out");
     zoomOut.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(0.8);
     });
     const zoomIn = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian7.setIcon)(zoomIn, "zoom-in");
+    (0, import_obsidian8.setIcon)(zoomIn, "zoom-in");
     zoomIn.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(1.25);
     });
     const fit = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian7.setIcon)(fit, "maximize");
+    (0, import_obsidian8.setIcon)(fit, "maximize");
     fit.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.fit();
@@ -2370,6 +2522,7 @@ var FlowView = class extends import_obsidian7.ItemView {
     if (this.hideDone) {
       scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
     }
+    this.graph = scoped;
     const connected = connectedPaths(scoped);
     const unlinkedCount = scoped.nodes.filter((record) => !connected.has(record.path)).length;
     if (!this.showUnlinked) {
@@ -2413,17 +2566,48 @@ var FlowView = class extends import_obsidian7.ItemView {
       this.emptyEl.setText("No tasks in this project yet.");
     }
   }
+  offerRelation(fromPath, toPath, client) {
+    const from = this.graph.nodes.find((record) => record.path === fromPath);
+    const to = this.graph.nodes.find((record) => record.path === toPath);
+    if (!from || !to)
+      return;
+    const short = (title) => title.length > 32 ? `${title.slice(0, 31)}\u2026` : title;
+    const choices = [
+      { label: `\u201C${short(from.title)}\u201D blocks \u201C${short(to.title)}\u201D`, kind: "dependency" },
+      { label: `\u201C${short(to.title)}\u201D continues \u201C${short(from.title)}\u201D`, kind: "continuation" },
+      { label: "Related", kind: "related" }
+    ];
+    const menu = new import_obsidian8.Menu();
+    for (const choice of choices) {
+      const draft = { from, to, kind: choice.kind };
+      const rejection = rejectionReason(this.graph, draft);
+      menu.addItem((item) => {
+        item.setTitle(rejection ? `${choice.label} \u2014 ${rejection}` : choice.label);
+        item.setDisabled(rejection !== null);
+        item.onClick(async () => {
+          try {
+            await writeRelation(this.app, draft);
+            new import_obsidian8.Notice("Relation created.");
+          } catch (error) {
+            console.error("[Simpromana] Relation write error:", error);
+            new import_obsidian8.Notice("\u274C Could not write the relation.");
+          }
+        });
+      });
+    }
+    menu.showAtPosition(client);
+  }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian7.TFile))
+    if (!(file instanceof import_obsidian8.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian7.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian8.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/main.ts
-var SimpromanaPlugin = class extends import_obsidian8.Plugin {
+var SimpromanaPlugin = class extends import_obsidian9.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SimpromanaSettingTab(this.app, this));
@@ -2452,10 +2636,10 @@ var SimpromanaPlugin = class extends import_obsidian8.Plugin {
       callback: async () => {
         try {
           await setupBases(this.app, this.settings);
-          new import_obsidian8.Notice("\u2705 Tasks.base updated.");
+          new import_obsidian9.Notice("\u2705 Tasks.base updated.");
         } catch (err) {
           console.error("[Simpromana] Setup bases error:", err);
-          new import_obsidian8.Notice("\u274C Failed to update Tasks.base.");
+          new import_obsidian9.Notice("\u274C Failed to update Tasks.base.");
         }
       }
     });

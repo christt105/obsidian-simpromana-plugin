@@ -102,6 +102,14 @@ export class CanvasGestures {
 		};
 	}
 
+	toClient(point: Point): Point {
+		const bounds = this.bounds;
+		return {
+			x: point.x * this.transform.k + this.transform.x + bounds.left,
+			y: point.y * this.transform.k + this.transform.y + bounds.top,
+		};
+	}
+
 	moveTo(target: Transform, animate: boolean): void {
 		this.stopMotion();
 		if (!animate) {

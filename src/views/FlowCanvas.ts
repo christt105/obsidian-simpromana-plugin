@@ -21,6 +21,7 @@ interface HitArea {
 
 interface CanvasHandlers {
 	onOpenTask(path: string, event: PointerEvent): void;
+	onConnect(from: string, to: string, client: Point): void;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(
@@ -100,6 +101,10 @@ export class FlowCanvas {
 	private simulation: ForceSimulation | null = null;
 	private simulationFrame = 0;
 	private grabOffset: Point = { x: 0, y: 0 };
+	private connecting = false;
+	private connectFrom: string | null = null;
+	private ghost: SVGPathElement | null = null;
+	private dropTarget: string | null = null;
 
 	constructor(private container: HTMLElement, private handlers: CanvasHandlers) {
 		this.svg = svgEl("svg", { class: "spm-flow-svg" });
@@ -119,7 +124,8 @@ export class FlowCanvas {
 			onHover: (point) => this.onHover(point),
 			onGesture: (active) => this.svg.toggleClass("is-panning", active),
 			onDoubleClick: (point) => this.onDoubleClick(point),
-			nodeAt: (point) => (this.mode === "force" ? this.hitTest(point) : null),
+			nodeAt: (point) =>
+				this.mode === "force" || this.connecting ? this.hitTest(point) : null,
 			onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
 		});
 
@@ -279,7 +285,59 @@ export class FlowCanvas {
 		}
 	}
 
+	setConnecting(connecting: boolean): void {
+		this.connecting = connecting;
+		this.svg.toggleClass("is-connecting", connecting);
+	}
+
+	private nodeCentre(path: string): Point | null {
+		const area = this.hitAreas.find((entry) => entry.path === path);
+		return area ? { x: area.x + area.width / 2, y: area.y + area.height / 2 } : null;
+	}
+
+	private markDropTarget(path: string | null): void {
+		if (path === this.dropTarget) return;
+		if (this.dropTarget) this.nodeElements.get(this.dropTarget)?.removeClass("is-drop-target");
+		if (path) this.nodeElements.get(path)?.addClass("is-drop-target");
+		this.dropTarget = path;
+	}
+
+	private onConnectDrag(path: string, point: Point, phase: DragPhase): void {
+		if (phase === "start") {
+			this.connectFrom = path;
+			this.ghost = svgEl("path", { class: "spm-flow-edge is-ghost" });
+			this.edgeLayer.appendChild(this.ghost);
+			return;
+		}
+
+		const from = this.connectFrom ? this.nodeCentre(this.connectFrom) : null;
+		if (!from || !this.connectFrom) return;
+
+		if (phase === "move") {
+			const target = this.hitTest(point);
+			this.markDropTarget(target === this.connectFrom ? null : target);
+			this.ghost?.setAttribute("d", curveBetween(from, point));
+			return;
+		}
+
+		const target = this.hitTest(point);
+		const source = this.connectFrom;
+		this.ghost?.remove();
+		this.ghost = null;
+		this.connectFrom = null;
+		this.markDropTarget(null);
+
+		if (target && target !== source) {
+			this.handlers.onConnect(source, target, this.gestures.toClient(point));
+		}
+	}
+
 	private onNodeDrag(path: string, point: Point, phase: DragPhase): void {
+		if (this.connecting) {
+			this.onConnectDrag(path, point, phase);
+			return;
+		}
+
 		const simulation = this.simulation;
 		const node = simulation?.get(path);
 		if (!simulation || !node) return;

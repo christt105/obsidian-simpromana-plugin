@@ -1,6 +1,8 @@
 import {
 	ItemView,
 	Keymap,
+	Menu,
+	Notice,
 	TFile,
 	ViewStateResult,
 	WorkspaceLeaf,
@@ -8,8 +10,10 @@ import {
 	setIcon,
 } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
-import type { NoteRecord, RelationKind } from "../graph/model";
+import type { NoteGraph, NoteRecord, RelationKind } from "../graph/model";
 import { buildNoteGraph, connectedPaths, dropNodes, selectSubgraph } from "../graph/build";
+import { rejectionReason } from "../graph/validate";
+import { writeRelation } from "../lib/relations";
 import { DEFAULT_LAYOUT_OPTIONS, layoutGraph } from "../graph/layout";
 import { GROUPING_LABELS } from "../graph/grouping";
 import type { GroupingMode } from "../graph/grouping";
@@ -60,6 +64,9 @@ export class FlowView extends ItemView {
 	private canvasEl: HTMLElement;
 	private emptyEl: HTMLElement;
 	private canvas: FlowCanvas | null = null;
+	private connecting = false;
+	private connectButton: HTMLButtonElement;
+	private graph: NoteGraph = { nodes: [], relations: [], unresolved: [] };
 
 	constructor(leaf: WorkspaceLeaf, private settings: SimpromanaSettings) {
 		super(leaf);
@@ -87,6 +94,7 @@ export class FlowView extends ItemView {
 		this.emptyEl = this.canvasEl.createDiv({ cls: "spm-flow-empty" });
 		this.canvas = new FlowCanvas(this.canvasEl, {
 			onOpenTask: (path, event) => this.openTask(path, event),
+			onConnect: (from, to, client) => this.offerRelation(from, to, client),
 		});
 
 		const refresh = debounce(() => this.render(false), 400, true);
@@ -198,6 +206,18 @@ export class FlowView extends ItemView {
 			this.render(true);
 		});
 
+		this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
+		this.connectButton.addEventListener("click", () => {
+			this.connecting = !this.connecting;
+			this.canvas?.setConnecting(this.connecting);
+			this.connectButton.toggleClass("is-active", this.connecting);
+			new Notice(
+				this.connecting
+					? "Drag from one task to another to relate them."
+					: "Connect mode off."
+			);
+		});
+
 		this.unpinButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Unpin" });
 		this.unpinButton.addEventListener("click", () => {
 			this.canvas?.unpinAll();
@@ -266,6 +286,7 @@ export class FlowView extends ItemView {
 			scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
 		}
 
+		this.graph = scoped;
 		const connected = connectedPaths(scoped);
 		const unlinkedCount = scoped.nodes.filter((record) => !connected.has(record.path)).length;
 		if (!this.showUnlinked) {
@@ -313,6 +334,39 @@ export class FlowView extends ItemView {
 		} else {
 			this.emptyEl.setText("No tasks in this project yet.");
 		}
+	}
+
+	private offerRelation(fromPath: string, toPath: string, client: { x: number; y: number }): void {
+		const from = this.graph.nodes.find((record) => record.path === fromPath);
+		const to = this.graph.nodes.find((record) => record.path === toPath);
+		if (!from || !to) return;
+
+		const short = (title: string) => (title.length > 32 ? `${title.slice(0, 31)}…` : title);
+		const choices: { label: string; kind: RelationKind }[] = [
+			{ label: `“${short(from.title)}” blocks “${short(to.title)}”`, kind: "dependency" },
+			{ label: `“${short(to.title)}” continues “${short(from.title)}”`, kind: "continuation" },
+			{ label: "Related", kind: "related" },
+		];
+
+		const menu = new Menu();
+		for (const choice of choices) {
+			const draft = { from, to, kind: choice.kind };
+			const rejection = rejectionReason(this.graph, draft);
+			menu.addItem((item) => {
+				item.setTitle(rejection ? `${choice.label} — ${rejection}` : choice.label);
+				item.setDisabled(rejection !== null);
+				item.onClick(async () => {
+					try {
+						await writeRelation(this.app, draft);
+						new Notice("Relation created.");
+					} catch (error) {
+						console.error("[Simpromana] Relation write error:", error);
+						new Notice("❌ Could not write the relation.");
+					}
+				});
+			});
+		}
+		menu.showAtPosition(client);
 	}
 
 	private openTask(path: string, event: MouseEvent): void {
