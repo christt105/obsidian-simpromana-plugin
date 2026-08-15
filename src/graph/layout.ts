@@ -321,18 +321,66 @@ function assignRows(
 	}
 }
 
-function sideAnchor(node: LayoutNode, towards: LayoutNode): Point {
-	const horizontal = Math.abs(towards.x - node.x) >= node.width;
-	if (horizontal) {
-		return {
-			x: towards.x > node.x ? node.x + node.width : node.x,
-			y: node.y + node.height / 2,
-		};
+type Side = "left" | "right" | "top" | "bottom";
+
+interface Endpoint {
+	node: LayoutNode;
+	side: Side;
+	towards: Point;
+	point: Point;
+}
+
+interface PendingEdge {
+	relation: NoteRelation;
+	cyclic: boolean;
+	from: Endpoint;
+	to: Endpoint;
+	waypoints: Point[];
+}
+
+function centreOf(node: LayoutNode): Point {
+	return { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+}
+
+function sideTowards(node: LayoutNode, towards: Point): Side {
+	const centre = centreOf(node);
+	const dx = towards.x - centre.x;
+	const dy = towards.y - centre.y;
+	if (Math.abs(dx) >= node.width) return dx >= 0 ? "right" : "left";
+	return dy >= 0 ? "bottom" : "top";
+}
+
+/**
+ * Spreads the edges leaving a node along the border instead of stacking them
+ * on a single point, keeping the order they arrive in so they do not cross.
+ */
+function assignPorts(endpoints: Endpoint[]): void {
+	const groups = new Map<string, Endpoint[]>();
+	for (const endpoint of endpoints) {
+		const key = `${endpoint.node.record.path}|${endpoint.side}`;
+		const group = groups.get(key);
+		if (group) group.push(endpoint);
+		else groups.set(key, [endpoint]);
 	}
-	return {
-		x: node.x + node.width / 2,
-		y: towards.y > node.y ? node.y + node.height : node.y,
-	};
+
+	for (const group of groups.values()) {
+		const { node, side } = group[0];
+		const vertical = side === "left" || side === "right";
+		group.sort((a, b) =>
+			vertical ? a.towards.y - b.towards.y : a.towards.x - b.towards.x
+		);
+
+		const span = vertical ? node.height : node.width;
+		const inset = Math.min(10, span / 4);
+		const usable = span - inset * 2;
+
+		group.forEach((endpoint, index) => {
+			const offset = inset + (usable * (index + 1)) / (group.length + 1);
+			endpoint.point = vertical
+				? { x: side === "right" ? node.x + node.width : node.x, y: node.y + offset }
+				: { x: node.x + offset, y: side === "bottom" ? node.y + node.height : node.y };
+		});
+	}
 }
 
 export function layoutGraph(graph: NoteGraph, options: LayoutOptions = DEFAULT_LAYOUT_OPTIONS): GraphLayout {
@@ -501,24 +549,34 @@ export function layoutGraph(graph: NoteGraph, options: LayoutOptions = DEFAULT_L
 
 	const nodeByPath = new Map(layoutNodes.map((node) => [node.record.path, node]));
 
+	const pending: PendingEdge[] = [];
+	const endpoints: Endpoint[] = [];
+
+	const addEndpoint = (node: LayoutNode, towards: Point, side: Side): Endpoint => {
+		const endpoint: Endpoint = { node, side, towards, point: centreOf(node) };
+		endpoints.push(endpoint);
+		return endpoint;
+	};
+
 	for (const edge of ordering) {
 		const source = nodeByPath.get(edge.source);
 		const target = nodeByPath.get(edge.target);
 		if (!source || !target) continue;
 
-		const points: Point[] = [
-			{ x: source.x + source.width, y: source.y + source.height / 2 },
-			...edge.dummies.map((dummy) => ({
-				x: dummy.layer * step + options.nodeWidth / 2,
-				y: dummy.y + dummy.height / 2,
-			})),
-			{ x: target.x, y: target.y + target.height / 2 },
-		];
+		const waypoints = edge.dummies.map((dummy) => ({
+			x: dummy.layer * step + options.nodeWidth / 2,
+			y: dummy.y + dummy.height / 2,
+		}));
 
-		layoutEdges.push({
+		const firstHop = waypoints[0] ?? centreOf(target);
+		const lastHop = waypoints[waypoints.length - 1] ?? centreOf(source);
+
+		pending.push({
 			relation: edge.relation,
-			points: edge.cyclic ? [...points].reverse() : points,
 			cyclic: edge.cyclic,
+			from: addEndpoint(source, firstHop, "right"),
+			to: addEndpoint(target, lastHop, "left"),
+			waypoints,
 		});
 	}
 
@@ -527,10 +585,24 @@ export function layoutGraph(graph: NoteGraph, options: LayoutOptions = DEFAULT_L
 		const from = nodeByPath.get(relation.from);
 		const to = nodeByPath.get(relation.to);
 		if (!from || !to) continue;
-		layoutEdges.push({
+
+		pending.push({
 			relation,
-			points: [sideAnchor(from, to), sideAnchor(to, from)],
 			cyclic: false,
+			from: addEndpoint(from, centreOf(to), sideTowards(from, centreOf(to))),
+			to: addEndpoint(to, centreOf(from), sideTowards(to, centreOf(from))),
+			waypoints: [],
+		});
+	}
+
+	assignPorts(endpoints);
+
+	for (const edge of pending) {
+		const points = [edge.from.point, ...edge.waypoints, edge.to.point];
+		layoutEdges.push({
+			relation: edge.relation,
+			points: edge.cyclic ? [...points].reverse() : points,
+			cyclic: edge.cyclic,
 		});
 	}
 

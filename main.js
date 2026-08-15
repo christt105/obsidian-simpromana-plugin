@@ -934,21 +934,44 @@ function assignRows(layers, neighbours, rowGap) {
     }
   }
 }
-function sideAnchor(node, towards) {
-  const horizontal = Math.abs(towards.x - node.x) >= node.width;
-  if (horizontal) {
-    return {
-      x: towards.x > node.x ? node.x + node.width : node.x,
-      y: node.y + node.height / 2
-    };
+function centreOf(node) {
+  return { x: node.x + node.width / 2, y: node.y + node.height / 2 };
+}
+function sideTowards(node, towards) {
+  const centre = centreOf(node);
+  const dx = towards.x - centre.x;
+  const dy = towards.y - centre.y;
+  if (Math.abs(dx) >= node.width)
+    return dx >= 0 ? "right" : "left";
+  return dy >= 0 ? "bottom" : "top";
+}
+function assignPorts(endpoints) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const endpoint of endpoints) {
+    const key = `${endpoint.node.record.path}|${endpoint.side}`;
+    const group = groups.get(key);
+    if (group)
+      group.push(endpoint);
+    else
+      groups.set(key, [endpoint]);
   }
-  return {
-    x: node.x + node.width / 2,
-    y: towards.y > node.y ? node.y + node.height : node.y
-  };
+  for (const group of groups.values()) {
+    const { node, side } = group[0];
+    const vertical = side === "left" || side === "right";
+    group.sort(
+      (a, b) => vertical ? a.towards.y - b.towards.y : a.towards.x - b.towards.x
+    );
+    const span = vertical ? node.height : node.width;
+    const inset = Math.min(10, span / 4);
+    const usable = span - inset * 2;
+    group.forEach((endpoint, index) => {
+      const offset = inset + usable * (index + 1) / (group.length + 1);
+      endpoint.point = vertical ? { x: side === "right" ? node.x + node.width : node.x, y: node.y + offset } : { x: node.x + offset, y: side === "bottom" ? node.y + node.height : node.y };
+    });
+  }
 }
 function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
-  var _a, _b, _c;
+  var _a, _b, _c, _d, _e;
   const records = new Map(graph.nodes.map((record) => [record.path, record]));
   const relations = graph.relations.filter(
     (relation) => records.has(relation.from) && records.has(relation.to)
@@ -1085,8 +1108,8 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
     }
     for (const layer of layers) {
       layer.sort((a, b) => {
-        var _a2, _b2, _c2, _d;
-        return ((_b2 = (_a2 = a.record) == null ? void 0 : _a2.title) != null ? _b2 : "").localeCompare((_d = (_c2 = b.record) == null ? void 0 : _c2.title) != null ? _d : "");
+        var _a2, _b2, _c2, _d2;
+        return ((_b2 = (_a2 = a.record) == null ? void 0 : _a2.title) != null ? _b2 : "").localeCompare((_d2 = (_c2 = b.record) == null ? void 0 : _c2.title) != null ? _d2 : "");
       });
     }
     orderLayers(layers, neighbours);
@@ -1113,23 +1136,30 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
     top += componentBottom - componentTop + options.componentGap;
   }
   const nodeByPath = new Map(layoutNodes.map((node) => [node.record.path, node]));
+  const pending = [];
+  const endpoints = [];
+  const addEndpoint = (node, towards, side) => {
+    const endpoint = { node, side, towards, point: centreOf(node) };
+    endpoints.push(endpoint);
+    return endpoint;
+  };
   for (const edge of ordering) {
     const source = nodeByPath.get(edge.source);
     const target = nodeByPath.get(edge.target);
     if (!source || !target)
       continue;
-    const points = [
-      { x: source.x + source.width, y: source.y + source.height / 2 },
-      ...edge.dummies.map((dummy) => ({
-        x: dummy.layer * step + options.nodeWidth / 2,
-        y: dummy.y + dummy.height / 2
-      })),
-      { x: target.x, y: target.y + target.height / 2 }
-    ];
-    layoutEdges.push({
+    const waypoints = edge.dummies.map((dummy) => ({
+      x: dummy.layer * step + options.nodeWidth / 2,
+      y: dummy.y + dummy.height / 2
+    }));
+    const firstHop = (_d = waypoints[0]) != null ? _d : centreOf(target);
+    const lastHop = (_e = waypoints[waypoints.length - 1]) != null ? _e : centreOf(source);
+    pending.push({
       relation: edge.relation,
-      points: edge.cyclic ? [...points].reverse() : points,
-      cyclic: edge.cyclic
+      cyclic: edge.cyclic,
+      from: addEndpoint(source, firstHop, "right"),
+      to: addEndpoint(target, lastHop, "left"),
+      waypoints
     });
   }
   for (const relation of relations) {
@@ -1139,10 +1169,21 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
     const to = nodeByPath.get(relation.to);
     if (!from || !to)
       continue;
-    layoutEdges.push({
+    pending.push({
       relation,
-      points: [sideAnchor(from, to), sideAnchor(to, from)],
-      cyclic: false
+      cyclic: false,
+      from: addEndpoint(from, centreOf(to), sideTowards(from, centreOf(to))),
+      to: addEndpoint(to, centreOf(from), sideTowards(to, centreOf(from))),
+      waypoints: []
+    });
+  }
+  assignPorts(endpoints);
+  for (const edge of pending) {
+    const points = [edge.from.point, ...edge.waypoints, edge.to.point];
+    layoutEdges.push({
+      relation: edge.relation,
+      points: edge.cyclic ? [...points].reverse() : points,
+      cyclic: edge.cyclic
     });
   }
   let unlinkedTop = null;
