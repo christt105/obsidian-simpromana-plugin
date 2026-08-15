@@ -17,6 +17,8 @@ export interface NoteRecord {
 	links: string[];
 	/** Outside the selected project, pulled in by a relation. */
 	external?: boolean;
+	/** Mentions dropped because the node is a hub. */
+	hiddenMentions?: number;
 }
 
 export interface NoteRelation {

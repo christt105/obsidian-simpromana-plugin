@@ -114,6 +114,39 @@ export function dropNodes(graph: Subgraph, shouldDrop: (record: NoteRecord) => b
 	};
 }
 
+/**
+ * Drops the mention edges of nodes above the degree limit. Declared relations
+ * are always kept: only links picked up from the note body collapse.
+ */
+export function collapseHubs(
+	graph: Subgraph,
+	limit: number
+): { graph: Subgraph; hidden: Map<string, number> } {
+	const hidden = new Map<string, number>();
+	if (limit <= 0) return { graph, hidden };
+
+	const degree = new Map<string, number>();
+	for (const relation of graph.relations) {
+		degree.set(relation.from, (degree.get(relation.from) ?? 0) + 1);
+		degree.set(relation.to, (degree.get(relation.to) ?? 0) + 1);
+	}
+
+	const hubs = new Set(
+		[...degree].filter(([, count]) => count > limit).map(([path]) => path)
+	);
+	if (hubs.size === 0) return { graph, hidden };
+
+	const relations = graph.relations.filter((relation) => {
+		if (relation.kind !== "mention") return true;
+		const ends = [relation.from, relation.to].filter((path) => hubs.has(path));
+		if (ends.length === 0) return true;
+		for (const path of ends) hidden.set(path, (hidden.get(path) ?? 0) + 1);
+		return false;
+	});
+
+	return { graph: { ...graph, relations }, hidden };
+}
+
 export function connectedPaths(graph: NoteGraph): Set<string> {
 	const connected = new Set<string>();
 	for (const relation of graph.relations) {

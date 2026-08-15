@@ -11,7 +11,13 @@ import {
 } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
 import type { NoteGraph, NoteRecord, RelationKind } from "../graph/model";
-import { buildNoteGraph, connectedPaths, dropNodes, selectSubgraph } from "../graph/build";
+import {
+	buildNoteGraph,
+	collapseHubs,
+	connectedPaths,
+	dropNodes,
+	selectSubgraph,
+} from "../graph/build";
 import { rejectionReason } from "../graph/validate";
 import { writeRelation } from "../lib/relations";
 import { DEFAULT_LAYOUT_OPTIONS, layoutGraph } from "../graph/layout";
@@ -40,7 +46,16 @@ export interface FlowViewState extends Record<string, unknown> {
 	references?: boolean;
 	grouping?: GroupingMode;
 	mode?: CanvasMode;
+	hubLimit?: number;
+	hiddenByProject?: Record<string, string[]>;
 }
+
+const HUB_LIMITS: { value: number; label: string }[] = [
+	{ value: 0, label: "Keep every mention" },
+	{ value: 8, label: "Collapse hubs over 8" },
+	{ value: 12, label: "Collapse hubs over 12" },
+	{ value: 20, label: "Collapse hubs over 20" },
+];
 
 const MODE_LABELS: Record<CanvasMode, string> = {
 	flow: "Flow layout",
@@ -55,6 +70,10 @@ export class FlowView extends ItemView {
 	private references = false;
 	private grouping: GroupingMode = "status";
 	private mode: CanvasMode = "flow";
+	private hubLimit = 12;
+	private hiddenByProject: Record<string, string[]> = {};
+	private hubSelect: HTMLSelectElement;
+	private hiddenButton: HTMLButtonElement;
 	private projectSelect: HTMLSelectElement;
 	private groupingSelect: HTMLSelectElement;
 	private modeSelect: HTMLSelectElement;
@@ -95,6 +114,7 @@ export class FlowView extends ItemView {
 		this.canvas = new FlowCanvas(this.canvasEl, {
 			onOpenTask: (path, event) => this.openTask(path, event),
 			onConnect: (from, to, client) => this.offerRelation(from, to, client),
+			onMenu: (path, client) => this.showMenu(path, client),
 		});
 
 		const refresh = debounce(() => this.render(false), 400, true);
@@ -131,7 +151,21 @@ export class FlowView extends ItemView {
 			references: this.references,
 			grouping: this.grouping,
 			mode: this.mode,
+			hubLimit: this.hubLimit,
+			hiddenByProject: this.hiddenByProject,
 		};
+	}
+
+	private get hidden(): string[] {
+		return this.projectPath ? this.hiddenByProject[this.projectPath] ?? [] : [];
+	}
+
+	private setHidden(paths: string[]): void {
+		if (!this.projectPath) return;
+		if (paths.length > 0) this.hiddenByProject[this.projectPath] = paths;
+		else delete this.hiddenByProject[this.projectPath];
+		this.app.workspace.requestSaveLayout();
+		this.render(false);
 	}
 
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -143,6 +177,10 @@ export class FlowView extends ItemView {
 		if (typeof next.references === "boolean") this.references = next.references;
 		if (typeof next.grouping === "string") this.grouping = next.grouping;
 		if (next.mode === "flow" || next.mode === "force") this.mode = next.mode;
+		if (typeof next.hubLimit === "number") this.hubLimit = next.hubLimit;
+		if (next.hiddenByProject && typeof next.hiddenByProject === "object") {
+			this.hiddenByProject = next.hiddenByProject;
+		}
 		await super.setState(state, result);
 		if (this.canvas) this.render(true);
 	}
@@ -194,6 +232,20 @@ export class FlowView extends ItemView {
 		this.addToggle(toolbar, "mentions", "Mentions", () => this.mentions, (value) => (this.mentions = value));
 		this.addToggle(toolbar, "references", "References", () => this.references, (value) => (this.references = value));
 		this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => (this.showUnlinked = value));
+
+		this.hubSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-hubs" });
+		for (const limit of HUB_LIMITS) {
+			this.hubSelect.createEl("option", { value: String(limit.value), text: limit.label });
+		}
+		this.hubSelect.value = String(this.hubLimit);
+		this.hubSelect.addEventListener("change", () => {
+			this.hubLimit = Number(this.hubSelect.value);
+			this.app.workspace.requestSaveLayout();
+			this.render(true);
+		});
+
+		this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
+		this.hiddenButton.addEventListener("click", () => this.setHidden([]));
 
 		this.groupingSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-grouping" });
 		for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
@@ -286,6 +338,15 @@ export class FlowView extends ItemView {
 			scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
 		}
 
+		const hidden = new Set(this.hidden);
+		if (hidden.size > 0) scoped = dropNodes(scoped, (record) => hidden.has(record.path));
+
+		const collapsed = collapseHubs(scoped, this.hubLimit);
+		scoped = collapsed.graph;
+		for (const record of scoped.nodes) {
+			record.hiddenMentions = collapsed.hidden.get(record.path);
+		}
+
 		this.graph = scoped;
 		const connected = connectedPaths(scoped);
 		const unlinkedCount = scoped.nodes.filter((record) => !connected.has(record.path)).length;
@@ -300,7 +361,10 @@ export class FlowView extends ItemView {
 		this.toggles.get("unlinked")?.setText(`Unlinked (${unlinkedCount})`);
 		this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked || this.mode === "force");
 		this.modeSelect.value = this.mode;
+		this.hubSelect.value = String(this.hubLimit);
 		this.unpinButton.toggle(this.mode === "force");
+		this.hiddenButton.toggle(hidden.size > 0);
+		this.hiddenButton.setText(`Show ${hidden.size} hidden`);
 
 		this.warningEl.empty();
 		const unresolved = scoped.unresolved.filter((entry) => entry.kind !== "mention");
@@ -334,6 +398,55 @@ export class FlowView extends ItemView {
 		} else {
 			this.emptyEl.setText("No tasks in this project yet.");
 		}
+	}
+
+	private showMenu(path: string | null, client: { x: number; y: number }): void {
+		const menu = new Menu();
+		const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
+
+		if (record) {
+			menu.addItem((item) =>
+				item
+					.setTitle("Open")
+					.setIcon("file-text")
+					.onClick(() => {
+						const file = this.app.vault.getAbstractFileByPath(record.path);
+						if (file instanceof TFile) this.app.workspace.getLeaf(false).openFile(file);
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Hide this card")
+					.setIcon("eye-off")
+					.onClick(() => this.setHidden([...this.hidden, record.path]))
+			);
+			menu.addSeparator();
+		}
+
+		const hiddenCount = this.hidden.length;
+		menu.addItem((item) =>
+			item
+				.setTitle(hiddenCount > 0 ? `Show ${hiddenCount} hidden card(s)` : "Nothing hidden")
+				.setIcon("eye")
+				.setDisabled(hiddenCount === 0)
+				.onClick(() => this.setHidden([]))
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle("Fit to screen")
+				.setIcon("maximize")
+				.onClick(() => this.canvas?.fit())
+		);
+		if (this.mode === "force") {
+			menu.addItem((item) =>
+				item
+					.setTitle("Release pinned nodes")
+					.setIcon("pin-off")
+					.onClick(() => this.canvas?.unpinAll())
+			);
+		}
+
+		menu.showAtPosition(client);
 	}
 
 	private offerRelation(fromPath: string, toPath: string, client: { x: number; y: number }): void {

@@ -19,6 +19,7 @@ export interface GestureHandlers {
 	onDoubleClick(point: Point): void;
 	nodeAt(point: Point): string | null;
 	onNodeDrag(path: string, point: Point, phase: DragPhase): void;
+	onContextMenu(point: Point, client: Point): void;
 }
 
 const MIN_SCALE = 0.05;
@@ -29,6 +30,7 @@ const FRICTION = 0.93;
 const MIN_VELOCITY = 0.03;
 const RECT_TTL = 250;
 const ANIMATION_MS = 260;
+const LONG_PRESS_MS = 550;
 
 function distance(a: Point, b: Point): number {
 	return Math.hypot(b.x - a.x, b.y - a.y);
@@ -55,6 +57,7 @@ export class CanvasGestures {
 	private renderFrame = 0;
 	private rect: DOMRect | null = null;
 	private rectTime = 0;
+	private longPress = 0;
 
 	constructor(private element: SVGSVGElement, private handlers: GestureHandlers) {
 		element.addEventListener("wheel", this.onWheel, { passive: false });
@@ -64,6 +67,7 @@ export class CanvasGestures {
 		element.addEventListener("pointercancel", this.onPointerUp);
 		element.addEventListener("pointerleave", this.onPointerLeave);
 		element.addEventListener("dblclick", this.onDoubleClick);
+		element.addEventListener("contextmenu", this.onContextMenu);
 		element.addEventListener("touchstart", this.onTouchStart, { passive: false });
 		element.addEventListener("touchmove", this.onTouchMove, { passive: false });
 	}
@@ -78,6 +82,8 @@ export class CanvasGestures {
 		this.element.removeEventListener("pointercancel", this.onPointerUp);
 		this.element.removeEventListener("pointerleave", this.onPointerLeave);
 		this.element.removeEventListener("dblclick", this.onDoubleClick);
+		this.element.removeEventListener("contextmenu", this.onContextMenu);
+		this.cancelLongPress();
 		this.element.removeEventListener("touchstart", this.onTouchStart);
 		this.element.removeEventListener("touchmove", this.onTouchMove);
 	}
@@ -234,7 +240,9 @@ export class CanvasGestures {
 			} else {
 				this.handlers.onGesture(true);
 			}
+			if (event.pointerType !== "mouse") this.armLongPress(this.local(event));
 		} else if (this.pointers.size === 2) {
+			this.cancelLongPress();
 			this.endNodeDrag();
 			const [a, b] = [...this.pointers.values()];
 			this.mode = "pinch";
@@ -265,6 +273,7 @@ export class CanvasGestures {
 
 		if (this.mode === "node" && this.draggedNode) {
 			this.moved += Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
+			if (this.moved > TAP_MOVEMENT) this.cancelLongPress();
 			this.handlers.onNodeDrag(this.draggedNode, this.toGraph(point), "move");
 			return;
 		}
@@ -276,6 +285,7 @@ export class CanvasGestures {
 			const elapsed = Math.max(1, now - this.lastMove);
 			this.lastMove = now;
 			this.moved += Math.abs(dx) + Math.abs(dy);
+			if (this.moved > TAP_MOVEMENT) this.cancelLongPress();
 			this.velocity = {
 				x: this.velocity.x * 0.3 + (dx / elapsed) * 0.7,
 				y: this.velocity.y * 0.3 + (dy / elapsed) * 0.7,
@@ -302,6 +312,7 @@ export class CanvasGestures {
 	};
 
 	private onPointerUp = (event: PointerEvent): void => {
+		this.cancelLongPress();
 		if (!this.pointers.has(event.pointerId)) return;
 		const point = this.local(event);
 		this.pointers.delete(event.pointerId);
@@ -346,6 +357,30 @@ export class CanvasGestures {
 		this.stopMotion();
 		this.transform = this.scaled(Math.pow(0.999, event.deltaY), this.local(event));
 		this.schedule();
+	};
+
+	private cancelLongPress(): void {
+		if (this.longPress) clearTimeout(this.longPress);
+		this.longPress = 0;
+	}
+
+	private armLongPress(point: Point): void {
+		this.cancelLongPress();
+		this.longPress = setTimeout(() => {
+			this.longPress = 0;
+			this.endNodeDrag(this.toGraph(point));
+			this.mode = "none";
+			this.pointers.clear();
+			this.handlers.onGesture(false);
+			this.handlers.onContextMenu(this.toGraph(point), this.toClient(this.toGraph(point)));
+		}, LONG_PRESS_MS);
+	}
+
+	private onContextMenu = (event: MouseEvent): void => {
+		event.preventDefault();
+		this.cancelLongPress();
+		const point = this.local(event);
+		this.handlers.onContextMenu(this.toGraph(point), { x: event.clientX, y: event.clientY });
 	};
 
 	private onDoubleClick = (event: MouseEvent): void => {

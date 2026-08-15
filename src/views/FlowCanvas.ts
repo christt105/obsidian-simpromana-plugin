@@ -22,6 +22,7 @@ interface HitArea {
 interface CanvasHandlers {
 	onOpenTask(path: string, event: PointerEvent): void;
 	onConnect(from: string, to: string, client: Point): void;
+	onMenu(path: string | null, client: Point): void;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(
@@ -127,6 +128,7 @@ export class FlowCanvas {
 			nodeAt: (point) =>
 				this.mode === "force" || this.connecting ? this.hitTest(point) : null,
 			onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
+			onContextMenu: (point, client) => this.handlers.onMenu(this.hitTest(point), client),
 		});
 
 		this.observer = new ResizeObserver(() => {
@@ -508,6 +510,12 @@ export class FlowCanvas {
 		}
 		if (record.external && record.projectName) {
 			meta.createSpan({ cls: "spm-flow-chip", text: record.projectName });
+		}
+		if (record.hiddenMentions) {
+			meta.createSpan({
+				cls: "spm-flow-chip is-collapsed",
+				text: `+${record.hiddenMentions} mentions`,
+			});
 		}
 
 		holder.appendChild(card);

@@ -311,6 +311,16 @@
 	color: var(--color-purple);
 }
 
+.spm-flow-chip.is-collapsed {
+	color: var(--color-purple);
+	border: 1px dashed var(--color-purple);
+	background-color: transparent;
+}
+
+.spm-flow-hubs {
+	max-width: 190px;
+}
+
 .spm-flow-card-title {
 	font-size: var(--font-ui-small);
 	font-weight: var(--font-medium);
