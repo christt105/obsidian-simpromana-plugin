@@ -2874,7 +2874,10 @@ var BoardView = class extends import_obsidian9.ItemView {
     return path.startsWith(`${tasksPath(this.settings)}/`) || path.startsWith(`${projectsPath(this.settings)}/`);
   }
   buildToolbar(toolbar) {
-    this.projectSelect = toolbar.createEl("select", { cls: "dropdown spm-board-project" });
+    this.projectSelect = toolbar.createEl("select", {
+      cls: "dropdown spm-board-project",
+      attr: { "aria-label": "Filter by project" }
+    });
     this.projectSelect.addEventListener("change", () => {
       this.projectPath = this.projectSelect.value || null;
       this.app.workspace.requestSaveLayout();

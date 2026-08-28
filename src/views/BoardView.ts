@@ -89,7 +89,10 @@ export class BoardView extends ItemView {
 	}
 
 	private buildToolbar(toolbar: HTMLElement): void {
-		this.projectSelect = toolbar.createEl("select", { cls: "dropdown spm-board-project" });
+		this.projectSelect = toolbar.createEl("select", {
+			cls: "dropdown spm-board-project",
+			attr: { "aria-label": "Filter by project" },
+		});
 		this.projectSelect.addEventListener("change", () => {
 			this.projectPath = this.projectSelect.value || null;
 			this.app.workspace.requestSaveLayout();
