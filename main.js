@@ -2915,6 +2915,19 @@ var BoardView = class extends import_obsidian9.ItemView {
     header.createSpan({ cls: "spm-board-column-title", text: column });
     header.createSpan({ cls: "spm-board-column-count", text: String(cards.length) });
     const list = columnEl.createDiv({ cls: "spm-board-column-list" });
+    list.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      list.addClass("is-drag-over");
+    });
+    list.addEventListener("dragleave", () => list.removeClass("is-drag-over"));
+    list.addEventListener("drop", (event) => {
+      var _a;
+      event.preventDefault();
+      list.removeClass("is-drag-over");
+      const path = (_a = event.dataTransfer) == null ? void 0 : _a.getData("text/plain");
+      if (path)
+        void this.moveTask(path, column);
+    });
     for (const record of cards) {
       list.appendChild(this.renderCard(record));
     }
@@ -2923,6 +2936,7 @@ var BoardView = class extends import_obsidian9.ItemView {
   renderCard(record) {
     const card = createDiv({ cls: "spm-board-card" });
     card.dataset.path = record.path;
+    card.draggable = true;
     card.createDiv({ cls: "spm-board-card-title", text: record.title });
     const meta = card.createDiv({ cls: "spm-board-card-meta" });
     if (record.projectName) {
@@ -2934,8 +2948,35 @@ var BoardView = class extends import_obsidian9.ItemView {
         text: record.priority
       });
     }
+    card.addEventListener("dragstart", (event) => {
+      var _a;
+      (_a = event.dataTransfer) == null ? void 0 : _a.setData("text/plain", record.path);
+      if (event.dataTransfer)
+        event.dataTransfer.effectAllowed = "move";
+      card.addClass("is-dragging");
+    });
+    card.addEventListener("dragend", () => card.removeClass("is-dragging"));
     card.addEventListener("click", (event) => this.openTask(record.path, event));
     return card;
+  }
+  async moveTask(path, column) {
+    const record = this.records.find((entry) => entry.path === path);
+    if (record && record.status.toLowerCase() === column.toLowerCase())
+      return;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian9.TFile))
+      return;
+    try {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        frontmatter.tstatus = column;
+      });
+      if (record)
+        record.status = column;
+      this.renderBoard();
+    } catch (error) {
+      console.error("[Simpromana] Board status update error:", error);
+      new import_obsidian9.Notice("\u274C Could not update the task status.");
+    }
   }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);

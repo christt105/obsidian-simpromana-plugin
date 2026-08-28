@@ -1,4 +1,4 @@
-import { ItemView, Keymap, TFile, ViewStateResult, WorkspaceLeaf, debounce } from "obsidian";
+import { ItemView, Keymap, Notice, TFile, ViewStateResult, WorkspaceLeaf, debounce } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes, projectFiles } from "../lib/notes";
@@ -138,6 +138,18 @@ export class BoardView extends ItemView {
 		header.createSpan({ cls: "spm-board-column-count", text: String(cards.length) });
 
 		const list = columnEl.createDiv({ cls: "spm-board-column-list" });
+		list.addEventListener("dragover", (event) => {
+			event.preventDefault();
+			list.addClass("is-drag-over");
+		});
+		list.addEventListener("dragleave", () => list.removeClass("is-drag-over"));
+		list.addEventListener("drop", (event) => {
+			event.preventDefault();
+			list.removeClass("is-drag-over");
+			const path = event.dataTransfer?.getData("text/plain");
+			if (path) void this.moveTask(path, column);
+		});
+
 		for (const record of cards) {
 			list.appendChild(this.renderCard(record));
 		}
@@ -147,6 +159,7 @@ export class BoardView extends ItemView {
 	private renderCard(record: NoteRecord): HTMLElement {
 		const card = createDiv({ cls: "spm-board-card" });
 		card.dataset.path = record.path;
+		card.draggable = true;
 
 		card.createDiv({ cls: "spm-board-card-title", text: record.title });
 
@@ -161,8 +174,33 @@ export class BoardView extends ItemView {
 			});
 		}
 
+		card.addEventListener("dragstart", (event) => {
+			event.dataTransfer?.setData("text/plain", record.path);
+			if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+			card.addClass("is-dragging");
+		});
+		card.addEventListener("dragend", () => card.removeClass("is-dragging"));
 		card.addEventListener("click", (event) => this.openTask(record.path, event));
 		return card;
+	}
+
+	private async moveTask(path: string, column: Column): Promise<void> {
+		const record = this.records.find((entry) => entry.path === path);
+		if (record && record.status.toLowerCase() === column.toLowerCase()) return;
+
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) return;
+
+		try {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				frontmatter.tstatus = column;
+			});
+			if (record) record.status = column;
+			this.renderBoard();
+		} catch (error) {
+			console.error("[Simpromana] Board status update error:", error);
+			new Notice("❌ Could not update the task status.");
+		}
 	}
 
 	private openTask(path: string, event: MouseEvent): void {
