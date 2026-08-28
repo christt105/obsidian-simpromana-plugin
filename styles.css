@@ -375,3 +375,52 @@
 .spm-flow-chip.is-priority.is-low::before {
 	background-color: var(--color-green);
 }
+
+.spm-panel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow-y: auto;
+	padding: var(--size-4-3);
+}
+
+.spm-panel-header h3 {
+	margin: 0 0 var(--size-4-2) 0;
+}
+
+.spm-panel-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	padding: var(--size-4-4) 0;
+}
+
+.spm-panel-group {
+	margin-bottom: var(--size-4-3);
+}
+
+.spm-panel-group h4 {
+	margin: 0 0 var(--size-2-2) 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-transform: uppercase;
+}
+
+.spm-panel-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.spm-panel-item {
+	padding: var(--size-2-1) 0;
+}
+
+.spm-panel-link {
+	color: var(--text-normal);
+	text-decoration: none;
+}
+
+.spm-panel-link:hover {
+	color: var(--text-accent);
+	text-decoration: underline;
+}
