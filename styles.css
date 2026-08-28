@@ -388,6 +388,11 @@
 	margin: 0 0 var(--size-4-2) 0;
 }
 
+.spm-panel-new-task {
+	margin-bottom: var(--size-4-3);
+	font-size: var(--font-ui-small);
+}
+
 .spm-panel-empty {
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);

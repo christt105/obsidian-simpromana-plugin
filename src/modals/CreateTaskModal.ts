@@ -33,7 +33,7 @@ export class CreateTaskModal extends Modal {
 	private projects: TFile[] = [];
 	private lockedProject = false;
 
-	constructor(app: App, private settings: SimpromanaSettings) {
+	constructor(app: App, private settings: SimpromanaSettings, private presetProject: TFile | null = null) {
 		super(app);
 	}
 
@@ -43,7 +43,7 @@ export class CreateTaskModal extends Modal {
 		contentEl.createEl("h2", { text: "New task" });
 
 		this.projects = await getAllProjects(this.app, this.settings);
-		const contextProject = activeProjectFile(this.app, this.settings);
+		const contextProject = this.presetProject ?? activeProjectFile(this.app, this.settings);
 
 		if (contextProject) {
 			this.selectedProject = contextProject;

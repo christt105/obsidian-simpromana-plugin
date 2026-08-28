@@ -239,9 +239,10 @@ var PRIORITY_OPTIONS2 = {
 };
 var NO_PROJECT = "__none__";
 var CreateTaskModal = class extends import_obsidian4.Modal {
-  constructor(app, settings) {
+  constructor(app, settings, presetProject = null) {
     super(app);
     this.settings = settings;
+    this.presetProject = presetProject;
     this.taskName = "";
     this.tstatus = "Todo";
     this.priority = "medium";
@@ -251,11 +252,12 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     this.lockedProject = false;
   }
   async onOpen() {
+    var _a;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", { text: "New task" });
     this.projects = await getAllProjects(this.app, this.settings);
-    const contextProject = activeProjectFile(this.app, this.settings);
+    const contextProject = (_a = this.presetProject) != null ? _a : activeProjectFile(this.app, this.settings);
     if (contextProject) {
       this.selectedProject = contextProject;
       this.lockedProject = true;
@@ -2874,6 +2876,7 @@ var ProjectPanelView = class extends import_obsidian9.ItemView {
       return;
     }
     this.headerEl.createEl("h3", { text: this.projectFile.basename });
+    this.renderNewTaskButton(this.projectFile);
     const tasks = collectNotes(this.app, this.settings, { references: false }).filter(
       (record) => record.kind === "task" && record.projectPath === this.projectFile.path
     );
@@ -2882,6 +2885,15 @@ var ProjectPanelView = class extends import_obsidian9.ItemView {
       return;
     }
     this.renderTaskGroups(tasks);
+  }
+  renderNewTaskButton(projectFile) {
+    const button = this.headerEl.createEl("button", {
+      cls: "spm-panel-new-task",
+      text: "+ New task"
+    });
+    button.addEventListener("click", () => {
+      new CreateTaskModal(this.app, this.settings, projectFile).open();
+    });
   }
   renderTaskGroups(tasks) {
     var _a;

@@ -3,6 +3,7 @@ import type { SimpromanaSettings } from "../settings";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes } from "../lib/notes";
 import { activeProjectFile, projectsPath, referencesPath, tasksPath } from "../lib/vault";
+import { CreateTaskModal } from "../modals/CreateTaskModal";
 
 export const PROJECT_PANEL_VIEW_TYPE = "simpromana-project-panel";
 
@@ -87,6 +88,7 @@ export class ProjectPanelView extends ItemView {
 		}
 
 		this.headerEl.createEl("h3", { text: this.projectFile.basename });
+		this.renderNewTaskButton(this.projectFile);
 
 		const tasks = collectNotes(this.app, this.settings, { references: false }).filter(
 			(record) => record.kind === "task" && record.projectPath === this.projectFile!.path
@@ -98,6 +100,16 @@ export class ProjectPanelView extends ItemView {
 		}
 
 		this.renderTaskGroups(tasks);
+	}
+
+	private renderNewTaskButton(projectFile: TFile): void {
+		const button = this.headerEl.createEl("button", {
+			cls: "spm-panel-new-task",
+			text: "+ New task",
+		});
+		button.addEventListener("click", () => {
+			new CreateTaskModal(this.app, this.settings, projectFile).open();
+		});
 	}
 
 	private renderTaskGroups(tasks: NoteRecord[]): void {
