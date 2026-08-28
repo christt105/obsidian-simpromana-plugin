@@ -1,9 +1,9 @@
-import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { ConfirmationModal, Notice, Plugin, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import { DEFAULT_SETTINGS, SimpromanaSettingTab, SimpromanaSettings } from "./settings";
 import { CreateProjectModal } from "./modals/CreateProjectModal";
 import { CreateTaskModal } from "./modals/CreateTaskModal";
 import { setupBases } from "./lib/bases";
-import { activeProjectFile } from "./lib/vault";
+import { activeProjectFile, archivePath, ensureFolder } from "./lib/vault";
 import { FLOW_VIEW_TYPE, FlowView, FlowViewState } from "./views/FlowView";
 
 export default class SimpromanaPlugin extends Plugin {
@@ -49,6 +49,52 @@ export default class SimpromanaPlugin extends Plugin {
 				}
 			},
 		});
+
+		this.addCommand({
+			id: "archive-task",
+			name: "Archive current task",
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file) return false;
+				const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+				if (frontmatter?.type !== "task") return false;
+				if (!checking) this.confirmArchiveTask(file);
+				return true;
+			},
+		});
+	}
+
+	private confirmArchiveTask(file: TFile): void {
+		const modal = new ConfirmationModal(this.app);
+		modal.setTitle("Archive task");
+		modal.setContent(
+			`Set "${file.basename}" to tstatus: Archive and move it into "${this.settings.archiveFolder}"?`
+		);
+		modal.addButton((btn) =>
+			btn
+				.setButtonText("Archive")
+				.setCta()
+				.setInitialFocus()
+				.onClick(() => this.archiveTask(file))
+		);
+		modal.addCancelButton();
+		modal.open();
+	}
+
+	private async archiveTask(file: TFile): Promise<void> {
+		try {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				frontmatter.tstatus = "Archive";
+			});
+			const folder = archivePath(this.settings);
+			await ensureFolder(this.app, folder);
+			const newPath = normalizePath(`${folder}/${file.name}`);
+			await this.app.fileManager.renameFile(file, newPath);
+			new Notice(`✅ Task "${file.basename}" archived.`);
+		} catch (err) {
+			console.error("[Simpromana] Archive task error:", err);
+			new Notice("❌ Failed to archive task.");
+		}
 	}
 
 	async openFlowView(): Promise<void> {

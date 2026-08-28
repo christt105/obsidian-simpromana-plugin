@@ -88,6 +88,9 @@ function tasksPath(s) {
 function referencesPath(s) {
   return (0, import_obsidian2.normalizePath)(`${s.rootFolder}/${s.referencesFolder}`);
 }
+function archivePath(s) {
+  return (0, import_obsidian2.normalizePath)(`${s.rootFolder}/${s.archiveFolder}`);
+}
 function generateId(length = 6) {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -2843,6 +2846,49 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
         }
       }
     });
+    this.addCommand({
+      id: "archive-task",
+      name: "Archive current task",
+      checkCallback: (checking) => {
+        var _a;
+        const file = this.app.workspace.getActiveFile();
+        if (!file)
+          return false;
+        const frontmatter = (_a = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter;
+        if ((frontmatter == null ? void 0 : frontmatter.type) !== "task")
+          return false;
+        if (!checking)
+          this.confirmArchiveTask(file);
+        return true;
+      }
+    });
+  }
+  confirmArchiveTask(file) {
+    const modal = new import_obsidian9.ConfirmationModal(this.app);
+    modal.setTitle("Archive task");
+    modal.setContent(
+      `Set "${file.basename}" to tstatus: Archive and move it into "${this.settings.archiveFolder}"?`
+    );
+    modal.addButton(
+      (btn) => btn.setButtonText("Archive").setCta().setInitialFocus().onClick(() => this.archiveTask(file))
+    );
+    modal.addCancelButton();
+    modal.open();
+  }
+  async archiveTask(file) {
+    try {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        frontmatter.tstatus = "Archive";
+      });
+      const folder = archivePath(this.settings);
+      await ensureFolder(this.app, folder);
+      const newPath = (0, import_obsidian9.normalizePath)(`${folder}/${file.name}`);
+      await this.app.fileManager.renameFile(file, newPath);
+      new import_obsidian9.Notice(`\u2705 Task "${file.basename}" archived.`);
+    } catch (err) {
+      console.error("[Simpromana] Archive task error:", err);
+      new import_obsidian9.Notice("\u274C Failed to archive task.");
+    }
   }
   async openFlowView() {
     var _a;
