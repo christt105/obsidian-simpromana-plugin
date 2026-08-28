@@ -511,6 +511,43 @@
 	background-color: var(--color-green);
 }
 
+.spm-board-blocked {
+	margin-top: var(--size-2-1);
+}
+
+.spm-board-blocked-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-1);
+	padding: 0 var(--size-2-2);
+	border-radius: var(--radius-s);
+	background-color: rgba(var(--color-red-rgb), 0.15);
+	color: var(--color-red);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.6;
+	cursor: pointer;
+	list-style: none;
+}
+
+.spm-board-blocked-badge::-webkit-details-marker {
+	display: none;
+}
+
+.spm-board-blocked-list {
+	margin: var(--size-2-2) 0 0;
+	padding-left: var(--size-4-3);
+	font-size: var(--font-ui-smaller);
+}
+
+.spm-board-blocked-link {
+	color: var(--text-accent);
+	cursor: pointer;
+}
+
+.spm-board-blocked-link:hover {
+	text-decoration: underline;
+}
+
 .spm-board-empty {
 	padding: var(--size-4-8);
 	text-align: center;

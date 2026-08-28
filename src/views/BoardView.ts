@@ -2,6 +2,7 @@ import { ItemView, Keymap, Notice, TFile, ViewStateResult, WorkspaceLeaf, deboun
 import type { SimpromanaSettings } from "../settings";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes, projectFiles } from "../lib/notes";
+import { toTargetList } from "../graph/relations";
 import { projectsPath, tasksPath } from "../lib/vault";
 
 export const BOARD_VIEW_TYPE = "simpromana-board";
@@ -177,6 +178,11 @@ export class BoardView extends ItemView {
 			});
 		}
 
+		const blockers = this.blockedBy(record);
+		if (blockers.length > 0) {
+			this.renderBlockedBadge(card, blockers);
+		}
+
 		card.addEventListener("dragstart", (event) => {
 			event.dataTransfer?.setData("text/plain", record.path);
 			if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
@@ -185,6 +191,39 @@ export class BoardView extends ItemView {
 		card.addEventListener("dragend", () => card.removeClass("is-dragging"));
 		card.addEventListener("click", (event) => this.openTask(record.path, event));
 		return card;
+	}
+
+	private blockedBy(record: NoteRecord): { path: string; title: string }[] {
+		const targets = toTargetList(record.frontmatter.blocked_by);
+		const dependencies: { path: string; title: string }[] = [];
+		for (const target of targets) {
+			const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
+			if (!(file instanceof TFile)) continue;
+			const match = this.records.find((entry) => entry.path === file.path);
+			dependencies.push({ path: file.path, title: match?.title ?? file.basename });
+		}
+		return dependencies;
+	}
+
+	private renderBlockedBadge(card: HTMLElement, blockers: { path: string; title: string }[]): void {
+		const details = card.createEl("details", { cls: "spm-board-blocked" });
+		const summary = details.createEl("summary", {
+			cls: "spm-board-blocked-badge",
+			text: `Blocked (${blockers.length})`,
+			attr: { title: blockers.map((dep) => dep.title).join(", ") },
+		});
+		summary.addEventListener("click", (event) => event.stopPropagation());
+
+		const list = details.createEl("ul", { cls: "spm-board-blocked-list" });
+		for (const dep of blockers) {
+			const item = list.createEl("li");
+			const link = item.createEl("a", { cls: "spm-board-blocked-link", text: dep.title });
+			link.addEventListener("click", (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				this.openTask(dep.path, event);
+			});
+		}
 	}
 
 	private async moveTask(path: string, column: Column): Promise<void> {

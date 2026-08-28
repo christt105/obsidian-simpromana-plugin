@@ -2951,6 +2951,10 @@ var BoardView = class extends import_obsidian9.ItemView {
         text: record.priority
       });
     }
+    const blockers = this.blockedBy(record);
+    if (blockers.length > 0) {
+      this.renderBlockedBadge(card, blockers);
+    }
     card.addEventListener("dragstart", (event) => {
       var _a;
       (_a = event.dataTransfer) == null ? void 0 : _a.setData("text/plain", record.path);
@@ -2961,6 +2965,38 @@ var BoardView = class extends import_obsidian9.ItemView {
     card.addEventListener("dragend", () => card.removeClass("is-dragging"));
     card.addEventListener("click", (event) => this.openTask(record.path, event));
     return card;
+  }
+  blockedBy(record) {
+    var _a;
+    const targets = toTargetList(record.frontmatter.blocked_by);
+    const dependencies = [];
+    for (const target of targets) {
+      const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
+      if (!(file instanceof import_obsidian9.TFile))
+        continue;
+      const match = this.records.find((entry) => entry.path === file.path);
+      dependencies.push({ path: file.path, title: (_a = match == null ? void 0 : match.title) != null ? _a : file.basename });
+    }
+    return dependencies;
+  }
+  renderBlockedBadge(card, blockers) {
+    const details = card.createEl("details", { cls: "spm-board-blocked" });
+    const summary = details.createEl("summary", {
+      cls: "spm-board-blocked-badge",
+      text: `Blocked (${blockers.length})`,
+      attr: { title: blockers.map((dep) => dep.title).join(", ") }
+    });
+    summary.addEventListener("click", (event) => event.stopPropagation());
+    const list = details.createEl("ul", { cls: "spm-board-blocked-list" });
+    for (const dep of blockers) {
+      const item = list.createEl("li");
+      const link = item.createEl("a", { cls: "spm-board-blocked-link", text: dep.title });
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.openTask(dep.path, event);
+      });
+    }
   }
   async moveTask(path, column) {
     const record = this.records.find((entry) => entry.path === path);
