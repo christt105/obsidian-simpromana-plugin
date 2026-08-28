@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => SimpromanaPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian9 = require("obsidian");
+var import_obsidian10 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -2806,8 +2806,148 @@ var FlowView = class extends import_obsidian8.ItemView {
   }
 };
 
+// src/views/BoardView.ts
+var import_obsidian9 = require("obsidian");
+var BOARD_VIEW_TYPE = "simpromana-board";
+var COLUMNS = ["Todo", "Doing", "Review", "Done"];
+var BoardView = class extends import_obsidian9.ItemView {
+  constructor(leaf, settings) {
+    super(leaf);
+    this.settings = settings;
+    this.records = [];
+    this.projectPath = null;
+  }
+  getViewType() {
+    return BOARD_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "Board";
+  }
+  getIcon() {
+    return "layout-list";
+  }
+  async onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.addClass("spm-board");
+    this.buildToolbar(root.createDiv({ cls: "spm-board-toolbar" }));
+    this.columnsEl = root.createDiv({ cls: "spm-board-columns" });
+    this.emptyEl = root.createDiv({ cls: "spm-board-empty" });
+    const refresh = (0, import_obsidian9.debounce)(() => this.refresh(), 400, true);
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (this.isRelevant(file.path))
+          refresh();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (this.isRelevant(file.path) || this.isRelevant(oldPath))
+          refresh();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (this.isRelevant(file.path))
+          refresh();
+      })
+    );
+    this.refresh();
+  }
+  async onClose() {
+  }
+  getState() {
+    var _a;
+    return { projectPath: (_a = this.projectPath) != null ? _a : void 0 };
+  }
+  async setState(state, result) {
+    const next = state != null ? state : {};
+    if (typeof next.projectPath === "string")
+      this.projectPath = next.projectPath;
+    await super.setState(state, result);
+    if (this.columnsEl) {
+      this.syncProjectSelect();
+      this.renderBoard();
+    }
+  }
+  isRelevant(path) {
+    return path.startsWith(`${tasksPath(this.settings)}/`) || path.startsWith(`${projectsPath(this.settings)}/`);
+  }
+  buildToolbar(toolbar) {
+    this.projectSelect = toolbar.createEl("select", { cls: "dropdown spm-board-project" });
+    this.projectSelect.addEventListener("change", () => {
+      this.projectPath = this.projectSelect.value || null;
+      this.app.workspace.requestSaveLayout();
+      this.renderBoard();
+    });
+  }
+  syncProjectSelect() {
+    var _a;
+    const projects = projectFiles(this.app, this.settings);
+    const current = this.projectPath;
+    this.projectSelect.empty();
+    this.projectSelect.createEl("option", { value: "", text: "Todos" });
+    for (const file of projects) {
+      this.projectSelect.createEl("option", { value: file.path, text: file.basename });
+    }
+    this.projectPath = current && projects.some((file) => file.path === current) ? current : null;
+    this.projectSelect.value = (_a = this.projectPath) != null ? _a : "";
+  }
+  refresh() {
+    this.records = collectNotes(this.app, this.settings, { references: false });
+    this.syncProjectSelect();
+    this.renderBoard();
+  }
+  renderBoard() {
+    this.columnsEl.empty();
+    const filtered = this.projectPath ? this.records.filter((record) => record.projectPath === this.projectPath) : this.records;
+    for (const column of COLUMNS) {
+      this.columnsEl.appendChild(this.renderColumn(column, filtered));
+    }
+    this.emptyEl.toggle(filtered.length === 0);
+    if (filtered.length === 0)
+      this.emptyEl.setText("No tasks found.");
+  }
+  renderColumn(column, filtered) {
+    const cards = filtered.filter((record) => record.status.toLowerCase() === column.toLowerCase());
+    const columnEl = createDiv({ cls: "spm-board-column" });
+    const header = columnEl.createDiv({ cls: "spm-board-column-header" });
+    header.createSpan({ cls: "spm-board-column-title", text: column });
+    header.createSpan({ cls: "spm-board-column-count", text: String(cards.length) });
+    const list = columnEl.createDiv({ cls: "spm-board-column-list" });
+    for (const record of cards) {
+      list.appendChild(this.renderCard(record));
+    }
+    return columnEl;
+  }
+  renderCard(record) {
+    const card = createDiv({ cls: "spm-board-card" });
+    card.dataset.path = record.path;
+    card.createDiv({ cls: "spm-board-card-title", text: record.title });
+    const meta = card.createDiv({ cls: "spm-board-card-meta" });
+    if (record.projectName) {
+      meta.createSpan({ cls: "spm-board-chip", text: record.projectName });
+    }
+    if (record.priority) {
+      meta.createSpan({
+        cls: `spm-board-chip is-priority is-${record.priority}`,
+        text: record.priority
+      });
+    }
+    card.addEventListener("click", (event) => this.openTask(record.path, event));
+    return card;
+  }
+  openTask(path, event) {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian9.TFile))
+      return;
+    const leaf = this.app.workspace.getLeaf(import_obsidian9.Keymap.isModEvent(event));
+    leaf.openFile(file);
+  }
+};
+
 // src/main.ts
-var SimpromanaPlugin = class extends import_obsidian9.Plugin {
+var SimpromanaPlugin = class extends import_obsidian10.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SimpromanaSettingTab(this.app, this));
@@ -2815,10 +2955,19 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
       FLOW_VIEW_TYPE,
       (leaf) => new FlowView(leaf, this.settings)
     );
+    this.registerView(
+      BOARD_VIEW_TYPE,
+      (leaf) => new BoardView(leaf, this.settings)
+    );
     this.addCommand({
       id: "open-task-flow",
       name: "Open task flow",
       callback: () => this.openFlowView()
+    });
+    this.addCommand({
+      id: "open-board",
+      name: "Open Board",
+      callback: () => this.openBoardView()
     });
     this.addCommand({
       id: "create-project",
@@ -2836,10 +2985,10 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
       callback: async () => {
         try {
           await setupBases(this.app, this.settings);
-          new import_obsidian9.Notice("\u2705 Tasks.base updated.");
+          new import_obsidian10.Notice("\u2705 Tasks.base updated.");
         } catch (err) {
           console.error("[Simpromana] Setup bases error:", err);
-          new import_obsidian9.Notice("\u274C Failed to update Tasks.base.");
+          new import_obsidian10.Notice("\u274C Failed to update Tasks.base.");
         }
       }
     });
@@ -2851,6 +3000,13 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
     const project = activeProjectFile(this.app, this.settings);
     const state = project ? { projectPath: project.path } : {};
     await leaf.setViewState({ type: FLOW_VIEW_TYPE, active: true, state });
+    await workspace.revealLeaf(leaf);
+  }
+  async openBoardView() {
+    var _a;
+    const { workspace } = this.app;
+    const leaf = (_a = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0]) != null ? _a : workspace.getLeaf("tab");
+    await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
     await workspace.revealLeaf(leaf);
   }
   async loadSettings() {
