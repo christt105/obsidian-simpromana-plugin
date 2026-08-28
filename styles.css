@@ -399,6 +399,29 @@
 	padding: var(--size-4-4) 0;
 }
 
+.spm-panel-progress {
+	margin-bottom: var(--size-4-3);
+}
+
+.spm-panel-progress-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: var(--size-2-2);
+}
+
+.spm-panel-progress-track {
+	height: 6px;
+	border-radius: var(--radius-s);
+	background-color: var(--background-modifier-border);
+	overflow: hidden;
+}
+
+.spm-panel-progress-fill {
+	height: 100%;
+	background-color: var(--interactive-accent);
+	transition: width 200ms ease-out;
+}
+
 .spm-panel-group {
 	margin-bottom: var(--size-4-3);
 }

@@ -87,19 +87,55 @@ export class ProjectPanelView extends ItemView {
 			return;
 		}
 
-		this.headerEl.createEl("h3", { text: this.projectFile.basename });
-		this.renderNewTaskButton(this.projectFile);
+		const projectFile = this.projectFile;
+		this.headerEl.createEl("h3", { text: projectFile.basename });
+		this.renderNewTaskButton(projectFile);
 
-		const tasks = collectNotes(this.app, this.settings, { references: false }).filter(
-			(record) => record.kind === "task" && record.projectPath === this.projectFile!.path
+		const records = collectNotes(this.app, this.settings, { references: true });
+		const tasks = records.filter(
+			(record) => record.kind === "task" && record.projectPath === projectFile.path
 		);
+		const references = records.filter(
+			(record) => record.kind === "reference" && record.projectPath === projectFile.path
+		);
+
+		this.renderProgress(tasks);
 
 		if (tasks.length === 0) {
 			this.bodyEl.createDiv({ cls: "spm-panel-empty", text: "No tasks in this project yet." });
-			return;
+		} else {
+			this.renderTaskGroups(tasks);
 		}
 
-		this.renderTaskGroups(tasks);
+		this.renderReferences(references);
+	}
+
+	private renderProgress(tasks: NoteRecord[]): void {
+		const counted = tasks.filter((task) => task.status !== "Archive" && task.status !== "Archived");
+		if (counted.length === 0) return;
+
+		const done = counted.filter((task) => task.status === "Done").length;
+		const percent = Math.round((done / counted.length) * 100);
+
+		const wrap = this.bodyEl.createDiv({ cls: "spm-panel-progress" });
+		wrap.createDiv({
+			cls: "spm-panel-progress-label",
+			text: `${done} / ${counted.length} done`,
+		});
+		const track = wrap.createDiv({ cls: "spm-panel-progress-track" });
+		const fill = track.createDiv({ cls: "spm-panel-progress-fill" });
+		fill.style.width = `${percent}%`;
+	}
+
+	private renderReferences(references: NoteRecord[]): void {
+		if (references.length === 0) return;
+
+		const section = this.bodyEl.createDiv({ cls: "spm-panel-group" });
+		section.createEl("h4", { text: `References (${references.length})` });
+		const list = section.createEl("ul", { cls: "spm-panel-list" });
+		for (const reference of references.sort((a, b) => a.title.localeCompare(b.title))) {
+			this.renderNoteItem(list, reference);
+		}
 	}
 
 	private renderNewTaskButton(projectFile: TFile): void {
@@ -132,17 +168,17 @@ export class ProjectPanelView extends ItemView {
 			section.createEl("h4", { text: `${status} (${items.length})` });
 			const list = section.createEl("ul", { cls: "spm-panel-list" });
 			for (const task of items) {
-				this.renderTaskItem(list, task);
+				this.renderNoteItem(list, task);
 			}
 		}
 	}
 
-	private renderTaskItem(list: HTMLElement, task: NoteRecord): void {
+	private renderNoteItem(list: HTMLElement, record: NoteRecord): void {
 		const item = list.createEl("li", { cls: "spm-panel-item" });
-		const link = item.createEl("a", { cls: "spm-panel-link", text: task.title, href: "#" });
+		const link = item.createEl("a", { cls: "spm-panel-link", text: record.title, href: "#" });
 		link.addEventListener("click", (event) => {
 			event.preventDefault();
-			this.openNote(task.path, event);
+			this.openNote(record.path, event);
 		});
 	}
 
