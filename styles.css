@@ -76,10 +76,6 @@
 	border-top-color: var(--color-purple);
 }
 
-.spm-flow-grouping.is-disabled {
-	opacity: 0.5;
-}
-
 .spm-flow-warning {
 	font-size: var(--font-ui-smaller);
 	color: var(--text-warning);
@@ -333,10 +329,6 @@
 	background-color: transparent;
 }
 
-.spm-flow-hubs {
-	max-width: 190px;
-}
-
 .spm-flow-card-title {
 	font-size: var(--font-ui-small);
 	font-weight: var(--font-medium);
@@ -390,4 +382,13 @@
 
 .spm-flow-chip.is-priority.is-low::before {
 	background-color: var(--color-green);
+}
+
+.spm-flow-settings h3 {
+	margin-top: var(--size-4-4);
+	margin-bottom: var(--size-2-2);
+}
+
+.spm-flow-settings h3:first-of-type {
+	margin-top: var(--size-4-2);
 }

@@ -16,18 +16,23 @@ import {
 	collapseHubs,
 	connectedPaths,
 	dropNodes,
+	filterRelationKinds,
 	selectSubgraph,
 } from "../graph/build";
 import { rejectionReason } from "../graph/validate";
 import { changeRelationKind, deleteRelation, writeRelation } from "../lib/relations";
 import { DEFAULT_LAYOUT_OPTIONS, layoutGraph } from "../graph/layout";
-import { GROUPING_LABELS } from "../graph/grouping";
-import type { GroupingMode } from "../graph/grouping";
+import type { LayoutOptions } from "../graph/layout";
+import { DEFAULT_FORCE_OPTIONS } from "../graph/force";
+import type { ForceOptions } from "../graph/force";
+import { DEFAULT_FLOW_PREFERENCES, clonePreferences } from "../graph/preferences";
+import type { FlowGraphPreferences } from "../graph/preferences";
 import { RELATION_LABELS } from "../graph/relations";
 import { collectNotes, createNoteResolver, projectFiles } from "../lib/notes";
 import { projectsPath, referencesPath, tasksPath } from "../lib/vault";
 import { FlowCanvas } from "./FlowCanvas";
 import type { CanvasMode } from "./FlowCanvas";
+import { FlowSettingsModal } from "./FlowSettingsModal";
 
 export const FLOW_VIEW_TYPE = "simpromana-flow";
 
@@ -38,24 +43,17 @@ const LEGEND: { kind: RelationKind; label: string }[] = [
 	{ kind: "mention", label: RELATION_LABELS.mention },
 ];
 
+const NO_PROJECT_PRESET_KEY = "__unassigned__";
+
 export interface FlowViewState extends Record<string, unknown> {
 	projectPath?: string;
 	hideDone?: boolean;
 	showUnlinked?: boolean;
-	mentions?: boolean;
 	references?: boolean;
-	grouping?: GroupingMode;
 	mode?: CanvasMode;
-	hubLimit?: number;
 	hiddenByProject?: Record<string, string[]>;
+	flowPresets?: Record<string, FlowGraphPreferences>;
 }
-
-const HUB_LIMITS: { value: number; label: string }[] = [
-	{ value: 0, label: "Keep every mention" },
-	{ value: 8, label: "Collapse hubs over 8" },
-	{ value: 12, label: "Collapse hubs over 12" },
-	{ value: 20, label: "Collapse hubs over 20" },
-];
 
 const MODE_LABELS: Record<CanvasMode, string> = {
 	flow: "Flow layout",
@@ -70,16 +68,12 @@ export class FlowView extends ItemView {
 	private projectPath: string | null = null;
 	private hideDone = false;
 	private showUnlinked = false;
-	private mentions = true;
 	private references = false;
-	private grouping: GroupingMode = "status";
 	private mode: CanvasMode = "flow";
-	private hubLimit = 12;
 	private hiddenByProject: Record<string, string[]> = {};
-	private hubSelect: HTMLSelectElement;
+	private flowPresets: Record<string, FlowGraphPreferences> = {};
 	private hiddenButton: HTMLButtonElement;
 	private projectSelect: HTMLSelectElement;
-	private groupingSelect: HTMLSelectElement;
 	private modeSelect: HTMLSelectElement;
 	private unpinButton: HTMLButtonElement;
 	private toggles = new Map<string, HTMLButtonElement>();
@@ -152,12 +146,10 @@ export class FlowView extends ItemView {
 			projectPath: this.projectPath ?? undefined,
 			hideDone: this.hideDone,
 			showUnlinked: this.showUnlinked,
-			mentions: this.mentions,
 			references: this.references,
-			grouping: this.grouping,
 			mode: this.mode,
-			hubLimit: this.hubLimit,
 			hiddenByProject: this.hiddenByProject,
+			flowPresets: this.flowPresets,
 		};
 	}
 
@@ -173,18 +165,38 @@ export class FlowView extends ItemView {
 		this.render(false);
 	}
 
+	private get presetKey(): string {
+		return this.projectPath ?? NO_PROJECT_PRESET_KEY;
+	}
+
+	private get preferences(): FlowGraphPreferences {
+		return this.flowPresets[this.presetKey] ?? DEFAULT_FLOW_PREFERENCES;
+	}
+
+	private setPreferences(next: FlowGraphPreferences): void {
+		this.flowPresets[this.presetKey] = clonePreferences(next);
+		this.app.workspace.requestSaveLayout();
+		this.render(true);
+	}
+
+	private resetPreferences(): void {
+		delete this.flowPresets[this.presetKey];
+		this.app.workspace.requestSaveLayout();
+		this.render(true);
+	}
+
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		const next = (state ?? {}) as FlowViewState;
 		if (typeof next.projectPath === "string") this.projectPath = next.projectPath;
 		if (typeof next.hideDone === "boolean") this.hideDone = next.hideDone;
 		if (typeof next.showUnlinked === "boolean") this.showUnlinked = next.showUnlinked;
-		if (typeof next.mentions === "boolean") this.mentions = next.mentions;
 		if (typeof next.references === "boolean") this.references = next.references;
-		if (typeof next.grouping === "string") this.grouping = next.grouping;
 		if (next.mode === "flow" || next.mode === "force") this.mode = next.mode;
-		if (typeof next.hubLimit === "number") this.hubLimit = next.hubLimit;
 		if (next.hiddenByProject && typeof next.hiddenByProject === "object") {
 			this.hiddenByProject = next.hiddenByProject;
+		}
+		if (next.flowPresets && typeof next.flowPresets === "object") {
+			this.flowPresets = next.flowPresets;
 		}
 		await super.setState(state, result);
 		if (this.canvas) this.render(true);
@@ -234,34 +246,11 @@ export class FlowView extends ItemView {
 		});
 
 		this.addToggle(toolbar, "done", "Hide done", () => this.hideDone, (value) => (this.hideDone = value));
-		this.addToggle(toolbar, "mentions", "Mentions", () => this.mentions, (value) => (this.mentions = value));
 		this.addToggle(toolbar, "references", "References", () => this.references, (value) => (this.references = value));
 		this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => (this.showUnlinked = value));
 
-		this.hubSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-hubs" });
-		for (const limit of HUB_LIMITS) {
-			this.hubSelect.createEl("option", { value: String(limit.value), text: limit.label });
-		}
-		this.hubSelect.value = String(this.hubLimit);
-		this.hubSelect.addEventListener("change", () => {
-			this.hubLimit = Number(this.hubSelect.value);
-			this.app.workspace.requestSaveLayout();
-			this.render(true);
-		});
-
 		this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
 		this.hiddenButton.addEventListener("click", () => this.setHidden([]));
-
-		this.groupingSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-grouping" });
-		for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
-			this.groupingSelect.createEl("option", { value: mode, text: `Group by ${label.toLowerCase()}` });
-		}
-		this.groupingSelect.value = this.grouping;
-		this.groupingSelect.addEventListener("change", () => {
-			this.grouping = this.groupingSelect.value as GroupingMode;
-			this.app.workspace.requestSaveLayout();
-			this.render(true);
-		});
 
 		this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
 		this.connectButton.addEventListener("click", () => {
@@ -293,6 +282,18 @@ export class FlowView extends ItemView {
 		setIcon(fit, "maximize");
 		fit.addEventListener("click", () => this.canvas?.fit());
 
+		const settingsButton = toolbar.createEl("button", { cls: "clickable-icon" });
+		setIcon(settingsButton, "settings");
+		settingsButton.setAttribute("aria-label", "Flow view settings");
+		settingsButton.addEventListener("click", () => {
+			new FlowSettingsModal(
+				this.app,
+				this.preferences,
+				(next) => this.setPreferences(next),
+				() => this.resetPreferences()
+			).open();
+		});
+
 		const legend = toolbar.createDiv({ cls: "spm-flow-legend" });
 		for (const entry of LEGEND) {
 			const item = legend.createDiv({ cls: "spm-flow-legend-item" });
@@ -322,12 +323,13 @@ export class FlowView extends ItemView {
 	private render(fit: boolean): void {
 		if (!this.canvas) return;
 
+		const preferences = this.preferences;
 		const projects = projectFiles(this.app, this.settings);
 		this.syncProjectOptions(projects);
 
 		const records = collectNotes(this.app, this.settings, { references: this.references });
 		const graph = buildNoteGraph(records, createNoteResolver(this.app, records), {
-			mentions: this.mentions,
+			mentions: true,
 		});
 
 		const projectPath = this.projectPath;
@@ -346,11 +348,13 @@ export class FlowView extends ItemView {
 		const hidden = new Set(this.hidden);
 		if (hidden.size > 0) scoped = dropNodes(scoped, (record) => hidden.has(record.path));
 
-		const collapsed = collapseHubs(scoped, this.hubLimit);
+		const collapsed = collapseHubs(scoped, preferences.hubLimit);
 		scoped = collapsed.graph;
 		for (const record of scoped.nodes) {
 			record.hiddenMentions = collapsed.hidden.get(record.path);
 		}
+
+		scoped = filterRelationKinds(scoped, preferences.drawKinds);
 
 		this.graph = scoped;
 		const connected = connectedPaths(scoped);
@@ -360,13 +364,10 @@ export class FlowView extends ItemView {
 		}
 
 		this.toggles.get("done")?.toggleClass("is-active", this.hideDone);
-		this.toggles.get("mentions")?.toggleClass("is-active", this.mentions);
 		this.toggles.get("references")?.toggleClass("is-active", this.references);
 		this.toggles.get("unlinked")?.toggleClass("is-active", this.showUnlinked);
 		this.toggles.get("unlinked")?.setText(`Unlinked (${unlinkedCount})`);
-		this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked || this.mode === "force");
 		this.modeSelect.value = this.mode;
-		this.hubSelect.value = String(this.hubLimit);
 		this.unpinButton.toggle(this.mode === "force");
 		this.hiddenButton.toggle(hidden.size > 0);
 		this.hiddenButton.setText(`Show ${hidden.size} hidden`);
@@ -379,10 +380,28 @@ export class FlowView extends ItemView {
 			this.warningEl.setAttribute("title", targets.join("\n"));
 		}
 
-		this.canvas.render(
-			layoutGraph(scoped, { ...DEFAULT_LAYOUT_OPTIONS, grouping: this.grouping }),
-			{ fit, mode: this.mode, relations: scoped.relations }
-		);
+		const layoutOptions: LayoutOptions = {
+			...DEFAULT_LAYOUT_OPTIONS,
+			nodeWidth: preferences.nodeWidth,
+			nodeHeight: preferences.nodeHeight,
+			layerGap: preferences.layerGap,
+			rowGap: preferences.rowGap,
+			grouping: preferences.grouping,
+		};
+		const forceOptions: ForceOptions = {
+			...DEFAULT_FORCE_OPTIONS,
+			charge: preferences.charge,
+			padding: preferences.collisionPadding,
+			alphaDecay: preferences.alphaDecay,
+			linkDistance: preferences.linkDistance,
+		};
+
+		this.canvas.render(layoutGraph(scoped, layoutOptions), {
+			fit,
+			mode: this.mode,
+			relations: scoped.relations,
+			force: forceOptions,
+		});
 		this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
 	}
 

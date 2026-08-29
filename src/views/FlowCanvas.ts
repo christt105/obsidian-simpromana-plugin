@@ -1,8 +1,8 @@
 import { setTooltip } from "obsidian";
 import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode } from "../graph/layout";
 import type { NoteRelation } from "../graph/model";
-import { ForceSimulation } from "../graph/force";
-import type { ForceNode } from "../graph/force";
+import { DEFAULT_FORCE_OPTIONS, ForceSimulation } from "../graph/force";
+import type { ForceNode, ForceOptions } from "../graph/force";
 import { CanvasGestures } from "./CanvasGestures";
 import type { DragPhase, Point, Transform } from "./CanvasGestures";
 
@@ -103,6 +103,7 @@ export class FlowCanvas {
 	private mode: CanvasMode = "flow";
 	private simulation: ForceSimulation | null = null;
 	private simulationFrame = 0;
+	private forceOptions: ForceOptions = DEFAULT_FORCE_OPTIONS;
 	private grabOffset: Point = { x: 0, y: 0 };
 	private connecting = false;
 	private connectFrom: string | null = null;
@@ -152,10 +153,11 @@ export class FlowCanvas {
 
 	render(
 		layout: GraphLayout,
-		options: { fit: boolean; mode: CanvasMode; relations: NoteRelation[] }
+		options: { fit: boolean; mode: CanvasMode; relations: NoteRelation[]; force?: ForceOptions }
 	): void {
 		this.layout = layout;
 		this.mode = options.mode;
+		this.forceOptions = options.force ?? DEFAULT_FORCE_OPTIONS;
 		this.edgeLayer.empty();
 		this.edgeElements = [];
 		this.neighbours.clear();
@@ -233,7 +235,7 @@ export class FlowCanvas {
 		}
 
 		const previous = this.simulation;
-		const simulation = new ForceSimulation(layout, relations);
+		const simulation = new ForceSimulation(layout, relations, this.forceOptions);
 		let carriedNodes = 0;
 		for (const node of simulation.nodes) {
 			const carried = previous?.get(node.path);
