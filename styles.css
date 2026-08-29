@@ -190,6 +190,22 @@
 	box-shadow: 0 0 0 2px var(--interactive-accent);
 }
 
+.spm-flow-node.is-connect-source .spm-flow-card {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 2px var(--interactive-accent);
+	animation: spm-flow-pulse 1200ms ease-in-out infinite;
+}
+
+@keyframes spm-flow-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.7;
+	}
+}
+
 .spm-flow-edge.is-faded {
 	opacity: 0.12;
 }

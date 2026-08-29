@@ -108,6 +108,7 @@ export class FlowCanvas {
 	private connectFrom: string | null = null;
 	private ghost: SVGPathElement | null = null;
 	private dropTarget: string | null = null;
+	private tapConnectFrom: string | null = null;
 
 	constructor(private container: HTMLElement, private handlers: CanvasHandlers) {
 		this.svg = svgEl("svg", { class: "spm-flow-svg" });
@@ -138,12 +139,14 @@ export class FlowCanvas {
 			if (this.pendingFit) this.fit(false);
 		});
 		this.observer.observe(this.container);
+		document.addEventListener("keydown", this.onKeyDown);
 	}
 
 	destroy(): void {
 		this.stopSimulation();
 		this.observer.disconnect();
 		this.gestures.destroy();
+		document.removeEventListener("keydown", this.onKeyDown);
 		this.svg.remove();
 	}
 
@@ -158,6 +161,8 @@ export class FlowCanvas {
 		this.neighbours.clear();
 		this.hitAreas = [];
 		this.hovered = null;
+		this.tapConnectFrom = null;
+		this.svg.toggleClass("is-connecting", this.connecting);
 
 		if (this.mode === "flow") {
 			if (layout.unlinkedTop !== null) {
@@ -294,6 +299,28 @@ export class FlowCanvas {
 		this.svg.toggleClass("is-connecting", connecting);
 	}
 
+	/** Tap-to-connect entry point for touch: highlights the source, then the next tap picks the target. */
+	beginConnectFrom(path: string): void {
+		this.cancelTapConnect();
+		this.tapConnectFrom = path;
+		this.nodeElements.get(path)?.addClass("is-connect-source");
+		this.svg.addClass("is-connecting");
+	}
+
+	cancelTapConnect(): void {
+		if (!this.tapConnectFrom) return;
+		this.nodeElements.get(this.tapConnectFrom)?.removeClass("is-connect-source");
+		this.tapConnectFrom = null;
+		this.svg.toggleClass("is-connecting", this.connecting);
+	}
+
+	private onKeyDown = (event: KeyboardEvent): void => {
+		if (event.key === "Escape" && this.tapConnectFrom) {
+			event.preventDefault();
+			this.cancelTapConnect();
+		}
+	};
+
 	private nodeCentre(path: string): Point | null {
 		const area = this.hitAreas.find((entry) => entry.path === path);
 		return area ? { x: area.x + area.width / 2, y: area.y + area.height / 2 } : null;
@@ -427,6 +454,16 @@ export class FlowCanvas {
 
 	private onTap(point: Point, event: PointerEvent): void {
 		const path = this.hitTest(point);
+
+		if (this.tapConnectFrom) {
+			const source = this.tapConnectFrom;
+			this.cancelTapConnect();
+			if (path && path !== source) {
+				this.handlers.onConnect(source, path, this.gestures.toClient(point));
+			}
+			return;
+		}
+
 		if (path) this.handlers.onOpenTask(path, event);
 	}
 

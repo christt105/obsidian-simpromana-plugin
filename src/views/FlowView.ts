@@ -425,6 +425,15 @@ export class FlowView extends ItemView {
 					.setIcon("eye-off")
 					.onClick(() => this.setHidden([...this.hidden, record.path]))
 			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Connect to another task…")
+					.setIcon("git-branch")
+					.onClick(() => {
+						this.canvas?.beginConnectFrom(record.path);
+						new Notice("Tap another task to connect, or tap empty space to cancel.");
+					})
+			);
 			menu.addSeparator();
 		}
 

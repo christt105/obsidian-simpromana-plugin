@@ -2010,6 +2010,13 @@ var FlowCanvas = class {
     this.connectFrom = null;
     this.ghost = null;
     this.dropTarget = null;
+    this.tapConnectFrom = null;
+    this.onKeyDown = (event) => {
+      if (event.key === "Escape" && this.tapConnectFrom) {
+        event.preventDefault();
+        this.cancelTapConnect();
+      }
+    };
     this.svg = svgEl("svg", { class: "spm-flow-svg" });
     this.svg.appendChild(this.buildDefs());
     this.viewport = svgEl("g", { class: "spm-flow-viewport" });
@@ -2035,11 +2042,13 @@ var FlowCanvas = class {
         this.fit(false);
     });
     this.observer.observe(this.container);
+    document.addEventListener("keydown", this.onKeyDown);
   }
   destroy() {
     this.stopSimulation();
     this.observer.disconnect();
     this.gestures.destroy();
+    document.removeEventListener("keydown", this.onKeyDown);
     this.svg.remove();
   }
   render(layout, options) {
@@ -2050,6 +2059,8 @@ var FlowCanvas = class {
     this.neighbours.clear();
     this.hitAreas = [];
     this.hovered = null;
+    this.tapConnectFrom = null;
+    this.svg.toggleClass("is-connecting", this.connecting);
     if (this.mode === "flow") {
       if (layout.unlinkedTop !== null) {
         this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
@@ -2175,6 +2186,22 @@ var FlowCanvas = class {
     this.connecting = connecting;
     this.svg.toggleClass("is-connecting", connecting);
   }
+  /** Tap-to-connect entry point for touch: highlights the source, then the next tap picks the target. */
+  beginConnectFrom(path) {
+    var _a;
+    this.cancelTapConnect();
+    this.tapConnectFrom = path;
+    (_a = this.nodeElements.get(path)) == null ? void 0 : _a.addClass("is-connect-source");
+    this.svg.addClass("is-connecting");
+  }
+  cancelTapConnect() {
+    var _a;
+    if (!this.tapConnectFrom)
+      return;
+    (_a = this.nodeElements.get(this.tapConnectFrom)) == null ? void 0 : _a.removeClass("is-connect-source");
+    this.tapConnectFrom = null;
+    this.svg.toggleClass("is-connecting", this.connecting);
+  }
   nodeCentre(path) {
     const area = this.hitAreas.find((entry) => entry.path === path);
     return area ? { x: area.x + area.width / 2, y: area.y + area.height / 2 } : null;
@@ -2295,6 +2322,14 @@ var FlowCanvas = class {
   }
   onTap(point, event) {
     const path = this.hitTest(point);
+    if (this.tapConnectFrom) {
+      const source = this.tapConnectFrom;
+      this.cancelTapConnect();
+      if (path && path !== source) {
+        this.handlers.onConnect(source, path, this.gestures.toClient(point));
+      }
+      return;
+    }
     if (path)
       this.handlers.onOpenTask(path, event);
   }
@@ -2817,6 +2852,13 @@ var FlowView = class extends import_obsidian8.ItemView {
       );
       menu.addItem(
         (item) => item.setTitle("Hide this card").setIcon("eye-off").onClick(() => this.setHidden([...this.hidden, record.path]))
+      );
+      menu.addItem(
+        (item) => item.setTitle("Connect to another task\u2026").setIcon("git-branch").onClick(() => {
+          var _a;
+          (_a = this.canvas) == null ? void 0 : _a.beginConnectFrom(record.path);
+          new import_obsidian8.Notice("Tap another task to connect, or tap empty space to cancel.");
+        })
       );
       menu.addSeparator();
     }
