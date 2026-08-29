@@ -79,6 +79,62 @@ var import_obsidian3 = require("obsidian");
 
 // src/lib/vault.ts
 var import_obsidian2 = require("obsidian");
+
+// src/graph/relations.ts
+var RELATION_KEYS = {
+  blocks: { kind: "dependency", inverted: false },
+  blocking: { kind: "dependency", inverted: false },
+  blockedby: { kind: "dependency", inverted: true },
+  dependson: { kind: "dependency", inverted: true },
+  continuedby: { kind: "continuation", inverted: false },
+  followedby: { kind: "continuation", inverted: false },
+  continues: { kind: "continuation", inverted: true },
+  follows: { kind: "continuation", inverted: true },
+  related: { kind: "related", inverted: false },
+  relatedto: { kind: "related", inverted: false }
+};
+var CANONICAL_RELATION_KEYS = {
+  dependency: "blocked_by",
+  continuation: "continues",
+  related: "related",
+  mention: ""
+};
+var RELATION_LABELS = {
+  dependency: "Blocks",
+  continuation: "Continues",
+  related: "Related",
+  mention: "Mentions"
+};
+function normalizeKey(key) {
+  return key.toLowerCase().replace(/[\s_-]/g, "");
+}
+function relationKeyOf(key) {
+  var _a;
+  return (_a = RELATION_KEYS[normalizeKey(key)]) != null ? _a : null;
+}
+function parseLinkTarget(raw) {
+  if (typeof raw !== "string") {
+    if (raw && typeof raw === "object" && "path" in raw) {
+      return parseLinkTarget(raw.path);
+    }
+    return null;
+  }
+  const match = raw.trim().match(/^\[\[(.*)\]\]$/);
+  const inner = (match ? match[1] : raw).trim();
+  const target = inner.split("|")[0].split("#")[0].trim();
+  return target.length > 0 ? target : null;
+}
+function toTargetList(value) {
+  if (value === null || value === void 0)
+    return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values.map(parseLinkTarget).filter((target) => target !== null);
+}
+
+// src/views/constants.ts
+var FLOW_VIEW_TYPE = "simpromana-flow";
+
+// src/lib/vault.ts
 function projectsPath(s) {
   return (0, import_obsidian2.normalizePath)(`${s.rootFolder}/${s.projectsFolder}`);
 }
@@ -106,12 +162,27 @@ async function getAllProjects(app, s) {
 }
 function activeProjectFile(app, s) {
   var _a;
+  const flowView = app.workspace.getActiveViewOfType(import_obsidian2.ItemView);
+  if ((flowView == null ? void 0 : flowView.getViewType()) === FLOW_VIEW_TYPE) {
+    const state = flowView.getState();
+    if (typeof state.projectPath === "string") {
+      const file = app.vault.getAbstractFileByPath(state.projectPath);
+      if (file instanceof import_obsidian2.TFile)
+        return file;
+    }
+  }
   const active = app.workspace.getActiveFile();
   if (!active)
     return null;
   const fm = (_a = app.metadataCache.getFileCache(active)) == null ? void 0 : _a.frontmatter;
   if ((fm == null ? void 0 : fm.type) === "project" && active.path.startsWith(projectsPath(s))) {
     return active;
+  }
+  if ((fm == null ? void 0 : fm.type) === "task") {
+    const projectTarget = parseLinkTarget(fm.project);
+    const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, active.path) : null;
+    if (projectFile)
+      return projectFile;
   }
   return null;
 }
@@ -239,9 +310,10 @@ var PRIORITY_OPTIONS2 = {
 };
 var NO_PROJECT = "__none__";
 var CreateTaskModal = class extends import_obsidian4.Modal {
-  constructor(app, settings) {
+  constructor(app, settings, presetProject) {
     super(app);
     this.settings = settings;
+    this.presetProject = presetProject;
     this.taskName = "";
     this.tstatus = "Todo";
     this.priority = "medium";
@@ -251,11 +323,12 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     this.lockedProject = false;
   }
   async onOpen() {
+    var _a;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", { text: "New task" });
     this.projects = await getAllProjects(this.app, this.settings);
-    const contextProject = activeProjectFile(this.app, this.settings);
+    const contextProject = (_a = this.presetProject) != null ? _a : activeProjectFile(this.app, this.settings);
     if (contextProject) {
       this.selectedProject = contextProject;
       this.lockedProject = true;
@@ -414,57 +487,6 @@ async function setupBases(app, s) {
 
 // src/views/FlowView.ts
 var import_obsidian9 = require("obsidian");
-
-// src/graph/relations.ts
-var RELATION_KEYS = {
-  blocks: { kind: "dependency", inverted: false },
-  blocking: { kind: "dependency", inverted: false },
-  blockedby: { kind: "dependency", inverted: true },
-  dependson: { kind: "dependency", inverted: true },
-  continuedby: { kind: "continuation", inverted: false },
-  followedby: { kind: "continuation", inverted: false },
-  continues: { kind: "continuation", inverted: true },
-  follows: { kind: "continuation", inverted: true },
-  related: { kind: "related", inverted: false },
-  relatedto: { kind: "related", inverted: false }
-};
-var CANONICAL_RELATION_KEYS = {
-  dependency: "blocked_by",
-  continuation: "continues",
-  related: "related",
-  mention: ""
-};
-var RELATION_LABELS = {
-  dependency: "Blocks",
-  continuation: "Continues",
-  related: "Related",
-  mention: "Mentions"
-};
-function normalizeKey(key) {
-  return key.toLowerCase().replace(/[\s_-]/g, "");
-}
-function relationKeyOf(key) {
-  var _a;
-  return (_a = RELATION_KEYS[normalizeKey(key)]) != null ? _a : null;
-}
-function parseLinkTarget(raw) {
-  if (typeof raw !== "string") {
-    if (raw && typeof raw === "object" && "path" in raw) {
-      return parseLinkTarget(raw.path);
-    }
-    return null;
-  }
-  const match = raw.trim().match(/^\[\[(.*)\]\]$/);
-  const inner = (match ? match[1] : raw).trim();
-  const target = inner.split("|")[0].split("#")[0].trim();
-  return target.length > 0 ? target : null;
-}
-function toTargetList(value) {
-  if (value === null || value === void 0)
-    return [];
-  const values = Array.isArray(value) ? value : [value];
-  return values.map(parseLinkTarget).filter((target) => target !== null);
-}
 
 // src/graph/build.ts
 function relationId(relation) {
@@ -2646,7 +2668,6 @@ var FlowSettingsModal = class extends import_obsidian8.Modal {
 };
 
 // src/views/FlowView.ts
-var FLOW_VIEW_TYPE = "simpromana-flow";
 var LEGEND = [
   { kind: "dependency", label: RELATION_LABELS.dependency },
   { kind: "continuation", label: RELATION_LABELS.continuation },
@@ -2825,6 +2846,10 @@ var FlowView = class extends import_obsidian9.ItemView {
     this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => this.showUnlinked = value);
     this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
     this.hiddenButton.addEventListener("click", () => this.setHidden([]));
+    const newTaskButton = toolbar.createEl("button", { cls: "clickable-icon" });
+    (0, import_obsidian9.setIcon)(newTaskButton, "plus");
+    newTaskButton.setAttribute("aria-label", "New task");
+    newTaskButton.addEventListener("click", () => this.openCreateTaskModal());
     this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
     this.connectButton.addEventListener("click", () => {
       var _a;
@@ -2985,9 +3010,19 @@ var FlowView = class extends import_obsidian9.ItemView {
       this.emptyEl.setText("No tasks in this project yet.");
     }
   }
+  openCreateTaskModal() {
+    const project = this.projectPath ? this.app.vault.getAbstractFileByPath(this.projectPath) : null;
+    new CreateTaskModal(this.app, this.settings, project instanceof import_obsidian9.TFile ? project : void 0).open();
+  }
   showMenu(path, client) {
     const menu = new import_obsidian9.Menu();
     const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
+    if (!record) {
+      menu.addItem(
+        (item) => item.setTitle("New task\u2026").setIcon("plus").onClick(() => this.openCreateTaskModal())
+      );
+      menu.addSeparator();
+    }
     if (record) {
       menu.addItem(
         (item) => item.setTitle("Open").setIcon("file-text").onClick(() => {

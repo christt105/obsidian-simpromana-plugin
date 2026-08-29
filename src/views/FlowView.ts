@@ -30,11 +30,13 @@ import type { FlowGraphPreferences } from "../graph/preferences";
 import { RELATION_LABELS } from "../graph/relations";
 import { collectNotes, createNoteResolver, projectFiles } from "../lib/notes";
 import { projectsPath, referencesPath, tasksPath } from "../lib/vault";
+import { CreateTaskModal } from "../modals/CreateTaskModal";
 import { FlowCanvas } from "./FlowCanvas";
 import type { CanvasMode } from "./FlowCanvas";
 import { FlowSettingsModal } from "./FlowSettingsModal";
+import { FLOW_VIEW_TYPE } from "./constants";
 
-export const FLOW_VIEW_TYPE = "simpromana-flow";
+export { FLOW_VIEW_TYPE };
 
 const LEGEND: { kind: RelationKind; label: string }[] = [
 	{ kind: "dependency", label: RELATION_LABELS.dependency },
@@ -252,6 +254,11 @@ export class FlowView extends ItemView {
 		this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
 		this.hiddenButton.addEventListener("click", () => this.setHidden([]));
 
+		const newTaskButton = toolbar.createEl("button", { cls: "clickable-icon" });
+		setIcon(newTaskButton, "plus");
+		newTaskButton.setAttribute("aria-label", "New task");
+		newTaskButton.addEventListener("click", () => this.openCreateTaskModal());
+
 		this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
 		this.connectButton.addEventListener("click", () => {
 			this.connecting = !this.connecting;
@@ -424,9 +431,24 @@ export class FlowView extends ItemView {
 		}
 	}
 
+	private openCreateTaskModal(): void {
+		const project = this.projectPath ? this.app.vault.getAbstractFileByPath(this.projectPath) : null;
+		new CreateTaskModal(this.app, this.settings, project instanceof TFile ? project : undefined).open();
+	}
+
 	private showMenu(path: string | null, client: { x: number; y: number }): void {
 		const menu = new Menu();
 		const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
+
+		if (!record) {
+			menu.addItem((item) =>
+				item
+					.setTitle("New task…")
+					.setIcon("plus")
+					.onClick(() => this.openCreateTaskModal())
+			);
+			menu.addSeparator();
+		}
 
 		if (record) {
 			menu.addItem((item) =>
