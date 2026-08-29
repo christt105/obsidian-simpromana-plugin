@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => SimpromanaPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian13 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -79,6 +79,62 @@ var import_obsidian3 = require("obsidian");
 
 // src/lib/vault.ts
 var import_obsidian2 = require("obsidian");
+
+// src/graph/relations.ts
+var RELATION_KEYS = {
+  blocks: { kind: "dependency", inverted: false },
+  blocking: { kind: "dependency", inverted: false },
+  blockedby: { kind: "dependency", inverted: true },
+  dependson: { kind: "dependency", inverted: true },
+  continuedby: { kind: "continuation", inverted: false },
+  followedby: { kind: "continuation", inverted: false },
+  continues: { kind: "continuation", inverted: true },
+  follows: { kind: "continuation", inverted: true },
+  related: { kind: "related", inverted: false },
+  relatedto: { kind: "related", inverted: false }
+};
+var CANONICAL_RELATION_KEYS = {
+  dependency: "blocked_by",
+  continuation: "continues",
+  related: "related",
+  mention: ""
+};
+var RELATION_LABELS = {
+  dependency: "Blocks",
+  continuation: "Continues",
+  related: "Related",
+  mention: "Mentions"
+};
+function normalizeKey(key) {
+  return key.toLowerCase().replace(/[\s_-]/g, "");
+}
+function relationKeyOf(key) {
+  var _a;
+  return (_a = RELATION_KEYS[normalizeKey(key)]) != null ? _a : null;
+}
+function parseLinkTarget(raw) {
+  if (typeof raw !== "string") {
+    if (raw && typeof raw === "object" && "path" in raw) {
+      return parseLinkTarget(raw.path);
+    }
+    return null;
+  }
+  const match = raw.trim().match(/^\[\[(.*)\]\]$/);
+  const inner = (match ? match[1] : raw).trim();
+  const target = inner.split("|")[0].split("#")[0].trim();
+  return target.length > 0 ? target : null;
+}
+function toTargetList(value) {
+  if (value === null || value === void 0)
+    return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values.map(parseLinkTarget).filter((target) => target !== null);
+}
+
+// src/views/constants.ts
+var FLOW_VIEW_TYPE = "simpromana-flow";
+
+// src/lib/vault.ts
 function projectsPath(s) {
   return (0, import_obsidian2.normalizePath)(`${s.rootFolder}/${s.projectsFolder}`);
 }
@@ -109,12 +165,27 @@ async function getAllProjects(app, s) {
 }
 function activeProjectFile(app, s) {
   var _a;
+  const flowView = app.workspace.getActiveViewOfType(import_obsidian2.ItemView);
+  if ((flowView == null ? void 0 : flowView.getViewType()) === FLOW_VIEW_TYPE) {
+    const state = flowView.getState();
+    if (typeof state.projectPath === "string") {
+      const file = app.vault.getAbstractFileByPath(state.projectPath);
+      if (file instanceof import_obsidian2.TFile)
+        return file;
+    }
+  }
   const active = app.workspace.getActiveFile();
   if (!active)
     return null;
   const fm = (_a = app.metadataCache.getFileCache(active)) == null ? void 0 : _a.frontmatter;
   if ((fm == null ? void 0 : fm.type) === "project" && active.path.startsWith(projectsPath(s))) {
     return active;
+  }
+  if ((fm == null ? void 0 : fm.type) === "task") {
+    const projectTarget = parseLinkTarget(fm.project);
+    const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, active.path) : null;
+    if (projectFile)
+      return projectFile;
   }
   return null;
 }
@@ -250,6 +321,7 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     this.tstatus = "Todo";
     this.priority = "medium";
     this.milestone = "";
+    this.epic = "";
     this.selectedProject = null;
     this.projects = [];
     this.lockedProject = false;
@@ -294,6 +366,9 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     new import_obsidian4.Setting(contentEl).setName("Milestone").setDesc("Optional version or milestone label.").addText(
       (text) => text.setPlaceholder("v1.0").onChange((v) => this.milestone = v)
     );
+    new import_obsidian4.Setting(contentEl).setName("Epic").setDesc("Optional label to group this task with others in the flow view.").addText(
+      (text) => text.setPlaceholder("Onboarding rework").onChange((v) => this.epic = v)
+    );
     new import_obsidian4.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Create").setCta().onClick(() => this.submit())
     );
@@ -318,11 +393,13 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     const filePath = (0, import_obsidian4.normalizePath)(`${folder}/${fileName}`);
     const projectLine = this.selectedProject ? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}` : "project:";
     const milestoneLine = this.milestone.trim() ? `milestone: "${this.milestone.trim()}"` : "";
+    const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
     const frontmatterLines = [
       `tstatus: ${this.tstatus}`,
       "type: task",
       `priority: ${this.priority}`,
       milestoneLine,
+      epicLine,
       projectLine
     ].filter(Boolean);
     const content = `---
@@ -420,57 +497,6 @@ async function setupBases(app, s) {
 // src/lib/relationPropertyWidget.ts
 var import_obsidian8 = require("obsidian");
 
-// src/graph/relations.ts
-var RELATION_KEYS = {
-  blocks: { kind: "dependency", inverted: false },
-  blocking: { kind: "dependency", inverted: false },
-  blockedby: { kind: "dependency", inverted: true },
-  dependson: { kind: "dependency", inverted: true },
-  continuedby: { kind: "continuation", inverted: false },
-  followedby: { kind: "continuation", inverted: false },
-  continues: { kind: "continuation", inverted: true },
-  follows: { kind: "continuation", inverted: true },
-  related: { kind: "related", inverted: false },
-  relatedto: { kind: "related", inverted: false }
-};
-var CANONICAL_RELATION_KEYS = {
-  dependency: "blocked_by",
-  continuation: "continues",
-  related: "related",
-  mention: ""
-};
-var RELATION_LABELS = {
-  dependency: "Blocks",
-  continuation: "Continues",
-  related: "Related",
-  mention: "Mentions"
-};
-function normalizeKey(key) {
-  return key.toLowerCase().replace(/[\s_-]/g, "");
-}
-function relationKeyOf(key) {
-  var _a;
-  return (_a = RELATION_KEYS[normalizeKey(key)]) != null ? _a : null;
-}
-function parseLinkTarget(raw) {
-  if (typeof raw !== "string") {
-    if (raw && typeof raw === "object" && "path" in raw) {
-      return parseLinkTarget(raw.path);
-    }
-    return null;
-  }
-  const match = raw.trim().match(/^\[\[(.*)\]\]$/);
-  const inner = (match ? match[1] : raw).trim();
-  const target = inner.split("|")[0].split("#")[0].trim();
-  return target.length > 0 ? target : null;
-}
-function toTargetList(value) {
-  if (value === null || value === void 0)
-    return [];
-  const values = Array.isArray(value) ? value : [value];
-  return values.map(parseLinkTarget).filter((target) => target !== null);
-}
-
 // src/lib/relations.ts
 var import_obsidian6 = require("obsidian");
 function declaration(draft) {
@@ -501,6 +527,38 @@ async function writeRelation(app, draft) {
     frontmatter[key] = values;
   });
 }
+async function stripRelationFromNote(app, note, other, kind) {
+  const file = app.vault.getAbstractFileByPath(note.path);
+  if (!(file instanceof import_obsidian6.TFile))
+    return;
+  await app.fileManager.processFrontMatter(file, (frontmatter) => {
+    for (const key of Object.keys(frontmatter)) {
+      const relationKey = relationKeyOf(key);
+      if (!relationKey || relationKey.kind !== kind)
+        continue;
+      const current = frontmatter[key];
+      const values = Array.isArray(current) ? current : current ? [current] : [];
+      const remaining = values.filter((value) => {
+        const parsed = parseLinkTarget(value);
+        return parsed === null || parsed.split("/").pop() !== other.basename;
+      });
+      if (remaining.length === values.length)
+        continue;
+      if (remaining.length === 0)
+        delete frontmatter[key];
+      else
+        frontmatter[key] = remaining;
+    }
+  });
+}
+async function deleteRelation(app, from, to, kind) {
+  await stripRelationFromNote(app, from, to, kind);
+  await stripRelationFromNote(app, to, from, kind);
+}
+async function changeRelationKind(app, from, to, fromKind, toKind) {
+  await deleteRelation(app, from, to, fromKind);
+  await writeRelation(app, { from, to, kind: toKind });
+}
 
 // src/lib/notes.ts
 var ID_PATTERN = /^(.*?)\s+-\s+([A-Za-z0-9]+)$/;
@@ -529,6 +587,7 @@ function readNote(app, file, kind) {
     status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
     priority: stringValue(frontmatter.priority),
     milestone: stringValue(frontmatter.milestone) || null,
+    epic: stringValue(frontmatter.epic) || null,
     frontmatter,
     links: ((_e = cache == null ? void 0 : cache.links) != null ? _e : []).map((link) => link.link)
   };
@@ -705,7 +764,7 @@ function registerRelationPropertyWidget(app, settings) {
 }
 
 // src/views/FlowView.ts
-var import_obsidian10 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 
 // src/graph/build.ts
 function relationId(relation) {
@@ -828,6 +887,12 @@ function collapseHubs(graph, limit) {
   });
   return { graph: { ...graph, relations }, hidden };
 }
+function filterRelationKinds(graph, drawKinds) {
+  return {
+    ...graph,
+    relations: graph.relations.filter((relation) => drawKinds[relation.kind])
+  };
+}
 function connectedPaths(graph) {
   const connected = /* @__PURE__ */ new Set();
   for (const relation of graph.relations) {
@@ -940,6 +1005,7 @@ function compareGroups(a, b) {
 }
 
 // src/graph/layout.ts
+var EPIC_PADDING = 20;
 var DEFAULT_LAYOUT_OPTIONS = {
   nodeWidth: 210,
   nodeHeight: 76,
@@ -1466,13 +1532,45 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
   }
   const width = layoutNodes.reduce((max, node) => Math.max(max, node.x + node.width), 0);
   const height = layoutNodes.reduce((max, node) => Math.max(max, node.y + node.height), 0);
-  return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, width, height, unlinkedTop };
+  const epics = computeEpicGroups(layoutNodes, EPIC_PADDING);
+  return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, epics, width, height, unlinkedTop };
+}
+function computeEpicGroups(nodes, padding) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const node of nodes) {
+    const epic = node.record.epic;
+    if (!epic)
+      continue;
+    const list = buckets.get(epic);
+    if (list)
+      list.push(node);
+    else
+      buckets.set(epic, [node]);
+  }
+  const epics = [];
+  for (const [label, members] of buckets) {
+    const minX = Math.min(...members.map((node) => node.x));
+    const minY = Math.min(...members.map((node) => node.y));
+    const maxX = Math.max(...members.map((node) => node.x + node.width));
+    const maxY = Math.max(...members.map((node) => node.y + node.height));
+    epics.push({
+      label,
+      x: minX - padding,
+      y: minY - padding,
+      width: maxX - minX + padding * 2,
+      height: maxY - minY + padding * 2
+    });
+  }
+  return epics;
 }
 
-// src/views/FlowCanvas.ts
-var import_obsidian9 = require("obsidian");
-
 // src/graph/force.ts
+var DEFAULT_LINK_DISTANCE = {
+  dependency: 280,
+  continuation: 260,
+  related: 320,
+  mention: 360
+};
 var DEFAULT_FORCE_OPTIONS = {
   charge: -1400,
   linkStrength: 0.12,
@@ -1482,15 +1580,10 @@ var DEFAULT_FORCE_OPTIONS = {
   alphaDecay: 0.022,
   alphaMin: 8e-3,
   padding: 26,
-  maxVelocity: 60
+  maxVelocity: 60,
+  linkDistance: DEFAULT_LINK_DISTANCE
 };
 var COLLISION_PASSES = 4;
-var LINK_DISTANCE = {
-  dependency: 280,
-  continuation: 260,
-  related: 320,
-  mention: 360
-};
 var ForceSimulation = class {
   constructor(layout, relations, options = DEFAULT_FORCE_OPTIONS) {
     this.options = options;
@@ -1519,7 +1612,7 @@ var ForceSimulation = class {
       const target = this.index.get(relation.to);
       if (!source || !target)
         continue;
-      this.links.push({ source, target, distance: LINK_DISTANCE[relation.kind] });
+      this.links.push({ source, target, distance: this.options.linkDistance[relation.kind] });
     }
     if (this.nodes.length > 0) {
       this.centre = {
@@ -1704,6 +1797,32 @@ var ForceSimulation = class {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   }
 };
+
+// src/graph/preferences.ts
+var DRAWABLE_KINDS = ["dependency", "continuation", "related", "mention"];
+var DEFAULT_FLOW_PREFERENCES = {
+  nodeWidth: DEFAULT_LAYOUT_OPTIONS.nodeWidth,
+  nodeHeight: DEFAULT_LAYOUT_OPTIONS.nodeHeight,
+  layerGap: DEFAULT_LAYOUT_OPTIONS.layerGap,
+  rowGap: DEFAULT_LAYOUT_OPTIONS.rowGap,
+  charge: DEFAULT_FORCE_OPTIONS.charge,
+  collisionPadding: DEFAULT_FORCE_OPTIONS.padding,
+  alphaDecay: DEFAULT_FORCE_OPTIONS.alphaDecay,
+  linkDistance: { ...DEFAULT_LINK_DISTANCE },
+  hubLimit: 12,
+  drawKinds: { dependency: true, continuation: true, related: true, mention: true },
+  grouping: "status"
+};
+function clonePreferences(preferences) {
+  return {
+    ...preferences,
+    linkDistance: { ...preferences.linkDistance },
+    drawKinds: { ...preferences.drawKinds }
+  };
+}
+
+// src/views/FlowCanvas.ts
+var import_obsidian9 = require("obsidian");
 
 // src/views/CanvasGestures.ts
 var MIN_SCALE = 0.05;
@@ -2050,6 +2169,7 @@ var CanvasGestures = class {
 // src/views/FlowCanvas.ts
 var SVG_NS = "http://www.w3.org/2000/svg";
 var FIT_PADDING = 32;
+var EDGE_HIT_TOLERANCE = 8;
 function svgEl(tag, attributes = {}) {
   const element = document.createElementNS(SVG_NS, tag);
   for (const [name, value] of Object.entries(attributes)) {
@@ -2108,6 +2228,8 @@ var FlowCanvas = class {
     this.layout = null;
     this.nodeElements = /* @__PURE__ */ new Map();
     this.edgeElements = [];
+    this.epicElements = /* @__PURE__ */ new Map();
+    this.epicMembers = /* @__PURE__ */ new Map();
     this.neighbours = /* @__PURE__ */ new Map();
     this.hitAreas = [];
     this.hovered = null;
@@ -2115,16 +2237,26 @@ var FlowCanvas = class {
     this.mode = "flow";
     this.simulation = null;
     this.simulationFrame = 0;
+    this.forceOptions = DEFAULT_FORCE_OPTIONS;
     this.grabOffset = { x: 0, y: 0 };
     this.connecting = false;
     this.connectFrom = null;
     this.ghost = null;
     this.dropTarget = null;
+    this.tapConnectFrom = null;
+    this.onKeyDown = (event) => {
+      if (event.key === "Escape" && this.tapConnectFrom) {
+        event.preventDefault();
+        this.cancelTapConnect();
+      }
+    };
     this.svg = svgEl("svg", { class: "spm-flow-svg" });
     this.svg.appendChild(this.buildDefs());
     this.viewport = svgEl("g", { class: "spm-flow-viewport" });
+    this.epicLayer = svgEl("g", { class: "spm-flow-epics" });
     this.edgeLayer = svgEl("g", { class: "spm-flow-edges" });
     this.nodeLayer = svgEl("g", { class: "spm-flow-nodes" });
+    this.viewport.appendChild(this.epicLayer);
     this.viewport.appendChild(this.edgeLayer);
     this.viewport.appendChild(this.nodeLayer);
     this.svg.appendChild(this.viewport);
@@ -2137,7 +2269,7 @@ var FlowCanvas = class {
       onDoubleClick: (point) => this.onDoubleClick(point),
       nodeAt: (point) => this.mode === "force" || this.connecting ? this.hitTest(point) : null,
       onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
-      onContextMenu: (point, client) => this.handlers.onMenu(this.hitTest(point), client)
+      onContextMenu: (point, client) => this.onContextMenu(point, client)
     });
     this.observer = new ResizeObserver(() => {
       this.gestures.invalidateBounds();
@@ -2145,21 +2277,42 @@ var FlowCanvas = class {
         this.fit(false);
     });
     this.observer.observe(this.container);
+    document.addEventListener("keydown", this.onKeyDown);
   }
   destroy() {
     this.stopSimulation();
     this.observer.disconnect();
     this.gestures.destroy();
+    document.removeEventListener("keydown", this.onKeyDown);
     this.svg.remove();
   }
   render(layout, options) {
+    var _a;
     this.layout = layout;
     this.mode = options.mode;
+    this.forceOptions = (_a = options.force) != null ? _a : DEFAULT_FORCE_OPTIONS;
     this.edgeLayer.empty();
     this.edgeElements = [];
     this.neighbours.clear();
     this.hitAreas = [];
     this.hovered = null;
+    this.tapConnectFrom = null;
+    this.svg.toggleClass("is-connecting", this.connecting);
+    this.epicLayer.empty();
+    this.epicElements.clear();
+    this.epicMembers.clear();
+    for (const epic of layout.epics) {
+      this.epicElements.set(epic.label, this.buildEpic(epic));
+    }
+    for (const node of layout.nodes) {
+      if (!node.record.epic)
+        continue;
+      const members = this.epicMembers.get(node.record.epic);
+      if (members)
+        members.push(node.record.path);
+      else
+        this.epicMembers.set(node.record.epic, [node.record.path]);
+    }
     if (this.mode === "flow") {
       if (layout.unlinkedTop !== null) {
         this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
@@ -2221,7 +2374,7 @@ var FlowCanvas = class {
       return;
     }
     const previous = this.simulation;
-    const simulation = new ForceSimulation(layout, relations);
+    const simulation = new ForceSimulation(layout, relations, this.forceOptions);
     let carriedNodes = 0;
     for (const node of simulation.nodes) {
       const carried = previous == null ? void 0 : previous.get(node.path);
@@ -2271,8 +2424,8 @@ var FlowCanvas = class {
       this.hitAreas.push({ path: node.path, x, y, width: node.width, height: node.height });
     }
     for (const edge of this.edgeElements) {
-      const from = simulation.get(edge.from);
-      const to = simulation.get(edge.to);
+      const from = simulation.get(edge.relation.from);
+      const to = simulation.get(edge.relation.to);
       if (!from || !to)
         continue;
       edge.element.setAttribute(
@@ -2280,10 +2433,52 @@ var FlowCanvas = class {
         curveBetween(borderPoint(from, to), borderPoint(to, from))
       );
     }
+    for (const [label, paths] of this.epicMembers) {
+      const elements = this.epicElements.get(label);
+      if (!elements)
+        continue;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const path of paths) {
+        const node = simulation.get(path);
+        if (!node)
+          continue;
+        minX = Math.min(minX, node.x - node.width / 2);
+        minY = Math.min(minY, node.y - node.height / 2);
+        maxX = Math.max(maxX, node.x + node.width / 2);
+        maxY = Math.max(maxY, node.y + node.height / 2);
+      }
+      if (minX === Infinity)
+        continue;
+      elements.rect.setAttribute("x", String(minX - EPIC_PADDING));
+      elements.rect.setAttribute("y", String(minY - EPIC_PADDING));
+      elements.rect.setAttribute("width", String(maxX - minX + EPIC_PADDING * 2));
+      elements.rect.setAttribute("height", String(maxY - minY + EPIC_PADDING * 2));
+      elements.label.setAttribute("x", String(minX - EPIC_PADDING + 10));
+      elements.label.setAttribute("y", String(minY - EPIC_PADDING + 18));
+    }
   }
   setConnecting(connecting) {
     this.connecting = connecting;
     this.svg.toggleClass("is-connecting", connecting);
+  }
+  /** Tap-to-connect entry point for touch: highlights the source, then the next tap picks the target. */
+  beginConnectFrom(path) {
+    var _a;
+    this.cancelTapConnect();
+    this.tapConnectFrom = path;
+    (_a = this.nodeElements.get(path)) == null ? void 0 : _a.addClass("is-connect-source");
+    this.svg.addClass("is-connecting");
+  }
+  cancelTapConnect() {
+    var _a;
+    if (!this.tapConnectFrom)
+      return;
+    (_a = this.nodeElements.get(this.tapConnectFrom)) == null ? void 0 : _a.removeClass("is-connect-source");
+    this.tapConnectFrom = null;
+    this.svg.toggleClass("is-connecting", this.connecting);
   }
   nodeCentre(path) {
     const area = this.hitAreas.find((entry) => entry.path === path);
@@ -2366,8 +2561,53 @@ var FlowCanvas = class {
     }
     return null;
   }
+  distanceToPath(path, point) {
+    const length = path.getTotalLength();
+    if (length === 0)
+      return Infinity;
+    const samples = Math.min(40, Math.max(8, Math.round(length / 12)));
+    let minDistance = Infinity;
+    for (let index = 0; index <= samples; index++) {
+      const sample = path.getPointAtLength(length * index / samples);
+      minDistance = Math.min(minDistance, Math.hypot(sample.x - point.x, sample.y - point.y));
+    }
+    return minDistance;
+  }
+  hitTestEdge(point) {
+    var _a;
+    const tolerance = EDGE_HIT_TOLERANCE / this.gestures.transform.k;
+    let closest = null;
+    for (const edge of this.edgeElements) {
+      const distance2 = this.distanceToPath(edge.element, point);
+      if (distance2 <= tolerance && (!closest || distance2 < closest.distance)) {
+        closest = { relation: edge.relation, distance: distance2 };
+      }
+    }
+    return (_a = closest == null ? void 0 : closest.relation) != null ? _a : null;
+  }
+  onContextMenu(point, client) {
+    const nodePath = this.hitTest(point);
+    if (nodePath) {
+      this.handlers.onMenu(nodePath, client);
+      return;
+    }
+    const edge = this.hitTestEdge(point);
+    if (edge) {
+      this.handlers.onEdgeMenu(edge, client);
+      return;
+    }
+    this.handlers.onMenu(null, client);
+  }
   onTap(point, event) {
     const path = this.hitTest(point);
+    if (this.tapConnectFrom) {
+      const source = this.tapConnectFrom;
+      this.cancelTapConnect();
+      if (path && path !== source) {
+        this.handlers.onConnect(source, path, this.gestures.toClient(point));
+      }
+      return;
+    }
     if (path)
       this.handlers.onOpenTask(path, event);
   }
@@ -2436,6 +2676,22 @@ var FlowCanvas = class {
     );
     return element;
   }
+  buildEpic(epic) {
+    const group = svgEl("g", { class: "spm-flow-epic" });
+    const rect = svgEl("rect", {
+      x: String(epic.x),
+      y: String(epic.y),
+      width: String(epic.width),
+      height: String(epic.height),
+      rx: "12"
+    });
+    const label = svgEl("text", { x: String(epic.x + 10), y: String(epic.y + 18) });
+    label.textContent = epic.label;
+    group.appendChild(rect);
+    group.appendChild(label);
+    this.epicLayer.appendChild(group);
+    return { rect, label };
+  }
   buildEdge(edge) {
     const kind = edge.cyclic ? "cycle" : edge.relation.kind;
     const path = svgEl("path", {
@@ -2445,7 +2701,7 @@ var FlowCanvas = class {
     if (!isUndirected(edge)) {
       path.setAttribute("marker-end", `url(#spm-arrow-${kind})`);
     }
-    this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
+    this.edgeElements.push({ element: path, relation: edge.relation });
     return path;
   }
   renderNode(node, previous) {
@@ -2532,7 +2788,7 @@ var FlowCanvas = class {
       element.toggleClass("is-focus", nodePath === path);
     }
     for (const edge of this.edgeElements) {
-      const active = edge.from === path || edge.to === path;
+      const active = edge.relation.from === path || edge.relation.to === path;
       edge.element.toggleClass("is-faded", !active);
       edge.element.toggleClass("is-active", active);
     }
@@ -2549,37 +2805,133 @@ var FlowCanvas = class {
   }
 };
 
+// src/views/FlowSettingsModal.ts
+var import_obsidian10 = require("obsidian");
+var FlowSettingsModal = class extends import_obsidian10.Modal {
+  constructor(app, current, onApply, onReset) {
+    super(app);
+    this.onApply = onApply;
+    this.onReset = onReset;
+    this.draft = clonePreferences(current);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("spm-flow-settings");
+    contentEl.createEl("h2", { text: "Flow view settings" });
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Saved as a preset for the currently selected project."
+    });
+    contentEl.createEl("h3", { text: "Layout" });
+    this.numberSetting(contentEl, "Card width", "px", () => this.draft.nodeWidth, (v) => this.draft.nodeWidth = v);
+    this.numberSetting(contentEl, "Card height", "px", () => this.draft.nodeHeight, (v) => this.draft.nodeHeight = v);
+    this.numberSetting(contentEl, "Layer spacing", "px", () => this.draft.layerGap, (v) => this.draft.layerGap = v);
+    this.numberSetting(contentEl, "Row spacing", "px", () => this.draft.rowGap, (v) => this.draft.rowGap = v);
+    contentEl.createEl("h3", { text: "Forces" });
+    this.numberSetting(contentEl, "Repulsion", "", () => this.draft.charge, (v) => this.draft.charge = v);
+    this.numberSetting(
+      contentEl,
+      "Collision radius",
+      "px",
+      () => this.draft.collisionPadding,
+      (v) => this.draft.collisionPadding = v
+    );
+    this.numberSetting(
+      contentEl,
+      "Cooling speed",
+      "",
+      () => this.draft.alphaDecay,
+      (v) => this.draft.alphaDecay = v,
+      1e-3
+    );
+    for (const kind of DRAWABLE_KINDS) {
+      this.numberSetting(
+        contentEl,
+        `${RELATION_LABELS[kind]} link distance`,
+        "px",
+        () => this.draft.linkDistance[kind],
+        (v) => this.draft.linkDistance[kind] = v
+      );
+    }
+    contentEl.createEl("h3", { text: "Filters" });
+    new import_obsidian10.Setting(contentEl).setName("Hub threshold").setDesc("Collapse mention edges for tasks with more connections than this. 0 keeps every mention.").addText((text) => {
+      text.inputEl.type = "number";
+      text.setValue(String(this.draft.hubLimit)).onChange((value) => {
+        const parsed = Number(value);
+        if (!Number.isNaN(parsed))
+          this.draft.hubLimit = parsed;
+      });
+    });
+    for (const kind of DRAWABLE_KINDS) {
+      new import_obsidian10.Setting(contentEl).setName(`Draw ${RELATION_LABELS[kind].toLowerCase()} relations`).addToggle(
+        (toggle) => toggle.setValue(this.draft.drawKinds[kind]).onChange((value) => this.draft.drawKinds[kind] = value)
+      );
+    }
+    new import_obsidian10.Setting(contentEl).setName("Group unlinked tasks by").addDropdown((dropdown) => {
+      for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
+        dropdown.addOption(mode, label);
+      }
+      dropdown.setValue(this.draft.grouping).onChange((value) => {
+        this.draft.grouping = value;
+      });
+    });
+    const actions = new import_obsidian10.Setting(contentEl);
+    actions.addButton(
+      (button) => button.setButtonText("Reset to defaults").onClick(() => {
+        this.onReset();
+        this.close();
+      })
+    );
+    actions.addButton(
+      (button) => button.setButtonText("Apply").setCta().onClick(() => {
+        this.onApply(this.draft);
+        this.close();
+      })
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+  numberSetting(container, name, suffix, get, set, step = 1) {
+    new import_obsidian10.Setting(container).setName(suffix ? `${name} (${suffix})` : name).addText((text) => {
+      text.inputEl.type = "number";
+      text.inputEl.step = String(step);
+      text.setValue(String(get())).onChange((value) => {
+        const parsed = Number(value);
+        if (!Number.isNaN(parsed))
+          set(parsed);
+      });
+    });
+  }
+};
+
 // src/views/FlowView.ts
-var FLOW_VIEW_TYPE = "simpromana-flow";
 var LEGEND = [
   { kind: "dependency", label: RELATION_LABELS.dependency },
   { kind: "continuation", label: RELATION_LABELS.continuation },
   { kind: "related", label: RELATION_LABELS.related },
   { kind: "mention", label: RELATION_LABELS.mention }
 ];
-var HUB_LIMITS = [
-  { value: 0, label: "Keep every mention" },
-  { value: 8, label: "Collapse hubs over 8" },
-  { value: 12, label: "Collapse hubs over 12" },
-  { value: 20, label: "Collapse hubs over 20" }
-];
+var NO_PROJECT_PRESET_KEY = "__unassigned__";
 var MODE_LABELS = {
   flow: "Flow layout",
   force: "Force graph"
 };
-var FlowView = class extends import_obsidian10.ItemView {
+function shortTitle(title) {
+  return title.length > 32 ? `${title.slice(0, 31)}\u2026` : title;
+}
+var FlowView = class extends import_obsidian11.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
     this.projectPath = null;
     this.hideDone = false;
     this.showUnlinked = false;
-    this.mentions = true;
     this.references = false;
-    this.grouping = "status";
     this.mode = "flow";
-    this.hubLimit = 12;
     this.hiddenByProject = {};
+    this.flowPresets = {};
     this.toggles = /* @__PURE__ */ new Map();
     this.canvas = null;
     this.connecting = false;
@@ -2604,9 +2956,10 @@ var FlowView = class extends import_obsidian10.ItemView {
     this.canvas = new FlowCanvas(this.canvasEl, {
       onOpenTask: (path, event) => this.openTask(path, event),
       onConnect: (from, to, client) => this.offerRelation(from, to, client),
-      onMenu: (path, client) => this.showMenu(path, client)
+      onMenu: (path, client) => this.showMenu(path, client),
+      onEdgeMenu: (relation, client) => this.showEdgeMenu(relation, client)
     });
-    const refresh = (0, import_obsidian10.debounce)(() => this.render(false), 400, true);
+    const refresh = (0, import_obsidian11.debounce)(() => this.render(false), 400, true);
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (this.isRelevant(file.path))
@@ -2638,12 +2991,10 @@ var FlowView = class extends import_obsidian10.ItemView {
       projectPath: (_a = this.projectPath) != null ? _a : void 0,
       hideDone: this.hideDone,
       showUnlinked: this.showUnlinked,
-      mentions: this.mentions,
       references: this.references,
-      grouping: this.grouping,
       mode: this.mode,
-      hubLimit: this.hubLimit,
-      hiddenByProject: this.hiddenByProject
+      hiddenByProject: this.hiddenByProject,
+      flowPresets: this.flowPresets
     };
   }
   get hidden() {
@@ -2660,6 +3011,24 @@ var FlowView = class extends import_obsidian10.ItemView {
     this.app.workspace.requestSaveLayout();
     this.render(false);
   }
+  get presetKey() {
+    var _a;
+    return (_a = this.projectPath) != null ? _a : NO_PROJECT_PRESET_KEY;
+  }
+  get preferences() {
+    var _a;
+    return (_a = this.flowPresets[this.presetKey]) != null ? _a : DEFAULT_FLOW_PREFERENCES;
+  }
+  setPreferences(next) {
+    this.flowPresets[this.presetKey] = clonePreferences(next);
+    this.app.workspace.requestSaveLayout();
+    this.render(true);
+  }
+  resetPreferences() {
+    delete this.flowPresets[this.presetKey];
+    this.app.workspace.requestSaveLayout();
+    this.render(true);
+  }
   async setState(state, result) {
     const next = state != null ? state : {};
     if (typeof next.projectPath === "string")
@@ -2668,18 +3037,15 @@ var FlowView = class extends import_obsidian10.ItemView {
       this.hideDone = next.hideDone;
     if (typeof next.showUnlinked === "boolean")
       this.showUnlinked = next.showUnlinked;
-    if (typeof next.mentions === "boolean")
-      this.mentions = next.mentions;
     if (typeof next.references === "boolean")
       this.references = next.references;
-    if (typeof next.grouping === "string")
-      this.grouping = next.grouping;
     if (next.mode === "flow" || next.mode === "force")
       this.mode = next.mode;
-    if (typeof next.hubLimit === "number")
-      this.hubLimit = next.hubLimit;
     if (next.hiddenByProject && typeof next.hiddenByProject === "object") {
       this.hiddenByProject = next.hiddenByProject;
+    }
+    if (next.flowPresets && typeof next.flowPresets === "object") {
+      this.flowPresets = next.flowPresets;
     }
     await super.setState(state, result);
     if (this.canvas)
@@ -2715,38 +3081,21 @@ var FlowView = class extends import_obsidian10.ItemView {
       this.render(true);
     });
     this.addToggle(toolbar, "done", "Hide done", () => this.hideDone, (value) => this.hideDone = value);
-    this.addToggle(toolbar, "mentions", "Mentions", () => this.mentions, (value) => this.mentions = value);
     this.addToggle(toolbar, "references", "References", () => this.references, (value) => this.references = value);
     this.addToggle(toolbar, "unlinked", "Unlinked", () => this.showUnlinked, (value) => this.showUnlinked = value);
-    this.hubSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-hubs" });
-    for (const limit of HUB_LIMITS) {
-      this.hubSelect.createEl("option", { value: String(limit.value), text: limit.label });
-    }
-    this.hubSelect.value = String(this.hubLimit);
-    this.hubSelect.addEventListener("change", () => {
-      this.hubLimit = Number(this.hubSelect.value);
-      this.app.workspace.requestSaveLayout();
-      this.render(true);
-    });
     this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
     this.hiddenButton.addEventListener("click", () => this.setHidden([]));
-    this.groupingSelect = toolbar.createEl("select", { cls: "dropdown spm-flow-grouping" });
-    for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
-      this.groupingSelect.createEl("option", { value: mode, text: `Group by ${label.toLowerCase()}` });
-    }
-    this.groupingSelect.value = this.grouping;
-    this.groupingSelect.addEventListener("change", () => {
-      this.grouping = this.groupingSelect.value;
-      this.app.workspace.requestSaveLayout();
-      this.render(true);
-    });
+    const newTaskButton = toolbar.createEl("button", { cls: "clickable-icon" });
+    (0, import_obsidian11.setIcon)(newTaskButton, "plus");
+    newTaskButton.setAttribute("aria-label", "New task");
+    newTaskButton.addEventListener("click", () => this.openCreateTaskModal());
     this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
     this.connectButton.addEventListener("click", () => {
       var _a;
       this.connecting = !this.connecting;
       (_a = this.canvas) == null ? void 0 : _a.setConnecting(this.connecting);
       this.connectButton.toggleClass("is-active", this.connecting);
-      new import_obsidian10.Notice(
+      new import_obsidian11.Notice(
         this.connecting ? "Drag from one task to another to relate them." : "Connect mode off."
       );
     });
@@ -2757,22 +3106,33 @@ var FlowView = class extends import_obsidian10.ItemView {
       this.unpinButton.hide();
     });
     const zoomOut = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian10.setIcon)(zoomOut, "zoom-out");
+    (0, import_obsidian11.setIcon)(zoomOut, "zoom-out");
     zoomOut.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(0.8);
     });
     const zoomIn = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian10.setIcon)(zoomIn, "zoom-in");
+    (0, import_obsidian11.setIcon)(zoomIn, "zoom-in");
     zoomIn.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(1.25);
     });
     const fit = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian10.setIcon)(fit, "maximize");
+    (0, import_obsidian11.setIcon)(fit, "maximize");
     fit.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.fit();
+    });
+    const settingsButton = toolbar.createEl("button", { cls: "clickable-icon" });
+    (0, import_obsidian11.setIcon)(settingsButton, "settings");
+    settingsButton.setAttribute("aria-label", "Flow view settings");
+    settingsButton.addEventListener("click", () => {
+      new FlowSettingsModal(
+        this.app,
+        this.preferences,
+        (next) => this.setPreferences(next),
+        () => this.resetPreferences()
+      ).open();
     });
     const legend = toolbar.createDiv({ cls: "spm-flow-legend" });
     for (const entry of LEGEND) {
@@ -2798,14 +3158,15 @@ var FlowView = class extends import_obsidian10.ItemView {
     }
   }
   render(fit) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     if (!this.canvas)
       return;
+    const preferences = this.preferences;
     const projects = projectFiles(this.app, this.settings);
     this.syncProjectOptions(projects);
     const records = collectNotes(this.app, this.settings, { references: this.references });
     const graph = buildNoteGraph(records, createNoteResolver(this.app, records), {
-      mentions: this.mentions
+      mentions: true
     });
     const projectPath = this.projectPath;
     let scoped = selectSubgraph(
@@ -2821,11 +3182,12 @@ var FlowView = class extends import_obsidian10.ItemView {
     const hidden = new Set(this.hidden);
     if (hidden.size > 0)
       scoped = dropNodes(scoped, (record) => hidden.has(record.path));
-    const collapsed = collapseHubs(scoped, this.hubLimit);
+    const collapsed = collapseHubs(scoped, preferences.hubLimit);
     scoped = collapsed.graph;
     for (const record of scoped.nodes) {
       record.hiddenMentions = collapsed.hidden.get(record.path);
     }
+    scoped = filterRelationKinds(scoped, preferences.drawKinds);
     this.graph = scoped;
     const connected = connectedPaths(scoped);
     const unlinkedCount = scoped.nodes.filter((record) => !connected.has(record.path)).length;
@@ -2833,13 +3195,10 @@ var FlowView = class extends import_obsidian10.ItemView {
       scoped = dropNodes(scoped, (record) => !connected.has(record.path));
     }
     (_a = this.toggles.get("done")) == null ? void 0 : _a.toggleClass("is-active", this.hideDone);
-    (_b = this.toggles.get("mentions")) == null ? void 0 : _b.toggleClass("is-active", this.mentions);
-    (_c = this.toggles.get("references")) == null ? void 0 : _c.toggleClass("is-active", this.references);
-    (_d = this.toggles.get("unlinked")) == null ? void 0 : _d.toggleClass("is-active", this.showUnlinked);
-    (_e = this.toggles.get("unlinked")) == null ? void 0 : _e.setText(`Unlinked (${unlinkedCount})`);
-    this.groupingSelect.toggleClass("is-disabled", !this.showUnlinked || this.mode === "force");
+    (_b = this.toggles.get("references")) == null ? void 0 : _b.toggleClass("is-active", this.references);
+    (_c = this.toggles.get("unlinked")) == null ? void 0 : _c.toggleClass("is-active", this.showUnlinked);
+    (_d = this.toggles.get("unlinked")) == null ? void 0 : _d.setText(`Unlinked (${unlinkedCount})`);
     this.modeSelect.value = this.mode;
-    this.hubSelect.value = String(this.hubLimit);
     this.unpinButton.toggle(this.mode === "force");
     this.hiddenButton.toggle(hidden.size > 0);
     this.hiddenButton.setText(`Show ${hidden.size} hidden`);
@@ -2850,10 +3209,27 @@ var FlowView = class extends import_obsidian10.ItemView {
       this.warningEl.setText(`${targets.length} unresolved link(s)`);
       this.warningEl.setAttribute("title", targets.join("\n"));
     }
-    this.canvas.render(
-      layoutGraph(scoped, { ...DEFAULT_LAYOUT_OPTIONS, grouping: this.grouping }),
-      { fit, mode: this.mode, relations: scoped.relations }
-    );
+    const layoutOptions = {
+      ...DEFAULT_LAYOUT_OPTIONS,
+      nodeWidth: preferences.nodeWidth,
+      nodeHeight: preferences.nodeHeight,
+      layerGap: preferences.layerGap,
+      rowGap: preferences.rowGap,
+      grouping: preferences.grouping
+    };
+    const forceOptions = {
+      ...DEFAULT_FORCE_OPTIONS,
+      charge: preferences.charge,
+      padding: preferences.collisionPadding,
+      alphaDecay: preferences.alphaDecay,
+      linkDistance: preferences.linkDistance
+    };
+    this.canvas.render(layoutGraph(scoped, layoutOptions), {
+      fit,
+      mode: this.mode,
+      relations: scoped.relations,
+      force: forceOptions
+    });
     this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
   }
   updateEmptyState(projectCount, nodeCount, unlinkedCount) {
@@ -2873,19 +3249,36 @@ var FlowView = class extends import_obsidian10.ItemView {
       this.emptyEl.setText("No tasks in this project yet.");
     }
   }
+  openCreateTaskModal() {
+    const project = this.projectPath ? this.app.vault.getAbstractFileByPath(this.projectPath) : null;
+    new CreateTaskModal(this.app, this.settings, project instanceof import_obsidian11.TFile ? project : void 0).open();
+  }
   showMenu(path, client) {
-    const menu = new import_obsidian10.Menu();
+    const menu = new import_obsidian11.Menu();
     const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
+    if (!record) {
+      menu.addItem(
+        (item) => item.setTitle("New task\u2026").setIcon("plus").onClick(() => this.openCreateTaskModal())
+      );
+      menu.addSeparator();
+    }
     if (record) {
       menu.addItem(
         (item) => item.setTitle("Open").setIcon("file-text").onClick(() => {
           const file = this.app.vault.getAbstractFileByPath(record.path);
-          if (file instanceof import_obsidian10.TFile)
+          if (file instanceof import_obsidian11.TFile)
             this.app.workspace.getLeaf(false).openFile(file);
         })
       );
       menu.addItem(
         (item) => item.setTitle("Hide this card").setIcon("eye-off").onClick(() => this.setHidden([...this.hidden, record.path]))
+      );
+      menu.addItem(
+        (item) => item.setTitle("Connect to another task\u2026").setIcon("git-branch").onClick(() => {
+          var _a;
+          (_a = this.canvas) == null ? void 0 : _a.beginConnectFrom(record.path);
+          new import_obsidian11.Notice("Tap another task to connect, or tap empty space to cancel.");
+        })
       );
       menu.addSeparator();
     }
@@ -2914,13 +3307,12 @@ var FlowView = class extends import_obsidian10.ItemView {
     const to = this.graph.nodes.find((record) => record.path === toPath);
     if (!from || !to)
       return;
-    const short = (title) => title.length > 32 ? `${title.slice(0, 31)}\u2026` : title;
     const choices = [
-      { label: `\u201C${short(from.title)}\u201D blocks \u201C${short(to.title)}\u201D`, kind: "dependency" },
-      { label: `\u201C${short(to.title)}\u201D continues \u201C${short(from.title)}\u201D`, kind: "continuation" },
+      { label: `\u201C${shortTitle(from.title)}\u201D blocks \u201C${shortTitle(to.title)}\u201D`, kind: "dependency" },
+      { label: `\u201C${shortTitle(to.title)}\u201D continues \u201C${shortTitle(from.title)}\u201D`, kind: "continuation" },
       { label: "Related", kind: "related" }
     ];
-    const menu = new import_obsidian10.Menu();
+    const menu = new import_obsidian11.Menu();
     for (const choice of choices) {
       const draft = { from, to, kind: choice.kind };
       const rejection = rejectionReason(this.graph, draft);
@@ -2930,30 +3322,85 @@ var FlowView = class extends import_obsidian10.ItemView {
         item.onClick(async () => {
           try {
             await writeRelation(this.app, draft);
-            new import_obsidian10.Notice("Relation created.");
+            new import_obsidian11.Notice("Relation created.");
           } catch (error) {
             console.error("[Simpromana] Relation write error:", error);
-            new import_obsidian10.Notice("\u274C Could not write the relation.");
+            new import_obsidian11.Notice("\u274C Could not write the relation.");
           }
         });
       });
     }
     menu.showAtPosition(client);
   }
+  showEdgeMenu(relation, client) {
+    const menu = new import_obsidian11.Menu();
+    if (relation.kind === "mention") {
+      menu.addItem(
+        (item) => item.setTitle("Mentions come from links in the note body \u2014 edit the text to change them").setIcon("info").setDisabled(true)
+      );
+      menu.showAtPosition(client);
+      return;
+    }
+    const from = this.graph.nodes.find((record) => record.path === relation.from);
+    const to = this.graph.nodes.find((record) => record.path === relation.to);
+    if (!from || !to)
+      return;
+    const graphWithoutEdge = {
+      ...this.graph,
+      relations: this.graph.relations.filter((entry) => entry !== relation)
+    };
+    const choices = [
+      { label: `\u201C${shortTitle(from.title)}\u201D blocks \u201C${shortTitle(to.title)}\u201D`, kind: "dependency" },
+      { label: `\u201C${shortTitle(to.title)}\u201D continues \u201C${shortTitle(from.title)}\u201D`, kind: "continuation" },
+      { label: "Related", kind: "related" }
+    ];
+    for (const choice of choices) {
+      if (choice.kind === relation.kind)
+        continue;
+      const draft = { from, to, kind: choice.kind };
+      const rejection = rejectionReason(graphWithoutEdge, draft);
+      menu.addItem((item) => {
+        item.setTitle(rejection ? `Change to: ${choice.label} \u2014 ${rejection}` : `Change to: ${choice.label}`);
+        item.setDisabled(rejection !== null);
+        item.onClick(async () => {
+          try {
+            await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
+            new import_obsidian11.Notice("Relation updated.");
+          } catch (error) {
+            console.error("[Simpromana] Relation update error:", error);
+            new import_obsidian11.Notice("\u274C Could not update the relation.");
+          }
+        });
+      });
+    }
+    menu.addSeparator();
+    menu.addItem(
+      (item) => item.setTitle("Delete relation").setIcon("trash").setWarning(true).onClick(async () => {
+        try {
+          await deleteRelation(this.app, from, to, relation.kind);
+          new import_obsidian11.Notice("Relation deleted.");
+        } catch (error) {
+          console.error("[Simpromana] Relation delete error:", error);
+          new import_obsidian11.Notice("\u274C Could not delete the relation.");
+        }
+      })
+    );
+    menu.showAtPosition(client);
+  }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian10.TFile))
+    if (!(file instanceof import_obsidian11.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian10.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian11.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/views/BoardView.ts
-var import_obsidian11 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 var BOARD_VIEW_TYPE = "simpromana-board";
 var COLUMNS = ["Todo", "Doing", "Review", "Done"];
-var BoardView = class extends import_obsidian11.ItemView {
+var BoardView = class extends import_obsidian12.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -2976,7 +3423,7 @@ var BoardView = class extends import_obsidian11.ItemView {
     this.buildToolbar(root.createDiv({ cls: "spm-board-toolbar" }));
     this.columnsEl = root.createDiv({ cls: "spm-board-columns" });
     this.emptyEl = root.createDiv({ cls: "spm-board-empty" });
-    const refresh = (0, import_obsidian11.debounce)(() => this.refresh(), 400, true);
+    const refresh = (0, import_obsidian12.debounce)(() => this.refresh(), 400, true);
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (this.isRelevant(file.path))
@@ -3115,7 +3562,7 @@ var BoardView = class extends import_obsidian11.ItemView {
     const dependencies = [];
     for (const target of targets) {
       const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
-      if (!(file instanceof import_obsidian11.TFile))
+      if (!(file instanceof import_obsidian12.TFile))
         continue;
       const match = this.records.find((entry) => entry.path === file.path);
       dependencies.push({ path: file.path, title: (_a = match == null ? void 0 : match.title) != null ? _a : file.basename });
@@ -3146,7 +3593,7 @@ var BoardView = class extends import_obsidian11.ItemView {
     if (record && record.status.toLowerCase() === column.toLowerCase())
       return;
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian11.TFile))
+    if (!(file instanceof import_obsidian12.TFile))
       return;
     try {
       await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
@@ -3157,27 +3604,27 @@ var BoardView = class extends import_obsidian11.ItemView {
       this.renderBoard();
     } catch (error) {
       console.error("[Simpromana] Board status update error:", error);
-      new import_obsidian11.Notice("\u274C Could not update the task status.");
+      new import_obsidian12.Notice("\u274C Could not update the task status.");
     }
   }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian11.TFile))
+    if (!(file instanceof import_obsidian12.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian11.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian12.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/views/ProjectPanelView.ts
-var import_obsidian12 = require("obsidian");
+var import_obsidian13 = require("obsidian");
 var PROJECT_PANEL_VIEW_TYPE = "simpromana-project-panel";
 var STATUS_ORDER2 = ["Doing", "Review", "Todo", "Done", "Archive", "Archived"];
 function statusRank(status) {
   const index = STATUS_ORDER2.indexOf(status);
   return index === -1 ? STATUS_ORDER2.length : index;
 }
-var ProjectPanelView = class extends import_obsidian12.ItemView {
+var ProjectPanelView = class extends import_obsidian13.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -3198,7 +3645,7 @@ var ProjectPanelView = class extends import_obsidian12.ItemView {
     root.addClass("spm-panel");
     this.headerEl = root.createDiv({ cls: "spm-panel-header" });
     this.bodyEl = root.createDiv({ cls: "spm-panel-body" });
-    const refresh = (0, import_obsidian12.debounce)(() => this.render(), 200, true);
+    const refresh = (0, import_obsidian13.debounce)(() => this.render(), 200, true);
     this.registerEvent(this.app.workspace.on("active-leaf-change", refresh));
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
@@ -3321,15 +3768,15 @@ var ProjectPanelView = class extends import_obsidian12.ItemView {
   }
   openNote(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian12.TFile))
+    if (!(file instanceof import_obsidian13.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian12.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian13.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/main.ts
-var SimpromanaPlugin = class extends import_obsidian13.Plugin {
+var SimpromanaPlugin = class extends import_obsidian14.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SimpromanaSettingTab(this.app, this));
@@ -3376,10 +3823,10 @@ var SimpromanaPlugin = class extends import_obsidian13.Plugin {
       callback: async () => {
         try {
           await setupBases(this.app, this.settings);
-          new import_obsidian13.Notice("\u2705 Tasks.base updated.");
+          new import_obsidian14.Notice("\u2705 Tasks.base updated.");
         } catch (err) {
           console.error("[Simpromana] Setup bases error:", err);
-          new import_obsidian13.Notice("\u274C Failed to update Tasks.base.");
+          new import_obsidian14.Notice("\u274C Failed to update Tasks.base.");
         }
       }
     });
@@ -3406,7 +3853,7 @@ var SimpromanaPlugin = class extends import_obsidian13.Plugin {
     });
   }
   confirmArchiveTask(file) {
-    const modal = new import_obsidian13.ConfirmationModal(this.app);
+    const modal = new import_obsidian14.ConfirmationModal(this.app);
     modal.setTitle("Archive task");
     modal.setContent(
       `Set "${file.basename}" to tstatus: Archive and move it into "${this.settings.archiveFolder}"?`
@@ -3424,12 +3871,12 @@ var SimpromanaPlugin = class extends import_obsidian13.Plugin {
       });
       const folder = archivePath(this.settings);
       await ensureFolder(this.app, folder);
-      const newPath = (0, import_obsidian13.normalizePath)(`${folder}/${file.name}`);
+      const newPath = (0, import_obsidian14.normalizePath)(`${folder}/${file.name}`);
       await this.app.fileManager.renameFile(file, newPath);
-      new import_obsidian13.Notice(`\u2705 Task "${file.basename}" archived.`);
+      new import_obsidian14.Notice(`\u2705 Task "${file.basename}" archived.`);
     } catch (err) {
       console.error("[Simpromana] Archive task error:", err);
-      new import_obsidian13.Notice("\u274C Failed to archive task.");
+      new import_obsidian14.Notice("\u274C Failed to archive task.");
     }
   }
   async openFlowView() {

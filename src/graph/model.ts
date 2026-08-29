@@ -13,6 +13,7 @@ export interface NoteRecord {
 	status: string;
 	priority: string;
 	milestone: string | null;
+	epic: string | null;
 	frontmatter: Record<string, unknown>;
 	links: string[];
 	/** Outside the selected project, pulled in by a relation. */
