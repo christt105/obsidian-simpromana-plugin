@@ -178,6 +178,14 @@ export class BoardView extends ItemView {
 			});
 		}
 
+		const dueState = this.dueDateState(record);
+		if (dueState) {
+			meta.createSpan({
+				cls: `spm-board-chip is-due-date is-${dueState.urgency}`,
+				text: dueState.label,
+			});
+		}
+
 		const blockers = this.blockedBy(record);
 		if (blockers.length > 0) {
 			this.renderBlockedBadge(card, blockers);
@@ -191,6 +199,21 @@ export class BoardView extends ItemView {
 		card.addEventListener("dragend", () => card.removeClass("is-dragging"));
 		card.addEventListener("click", (event) => this.openTask(record.path, event));
 		return card;
+	}
+
+	private dueDateState(record: NoteRecord): { label: string; urgency: "overdue" | "soon" | "normal" } | null {
+		const raw = record.frontmatter.due_date;
+		if (typeof raw !== "string" || !raw.trim()) return null;
+
+		const due = new Date(`${raw.trim()}T00:00:00`);
+		if (Number.isNaN(due.getTime())) return null;
+
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const daysLeft = Math.round((due.getTime() - today.getTime()) / 86_400_000);
+
+		const urgency = daysLeft < 0 ? "overdue" : daysLeft <= 3 ? "soon" : "normal";
+		return { label: raw.trim(), urgency };
 	}
 
 	private blockedBy(record: NoteRecord): { path: string; title: string }[] {

@@ -30,6 +30,7 @@ export class CreateTaskModal extends Modal {
 	private priority = "medium";
 	private milestone = "";
 	private epic = "";
+	private dueDate = "";
 	private selectedProject: TFile | null = null;
 	private projects: TFile[] = [];
 	private lockedProject = false;
@@ -111,6 +112,14 @@ export class CreateTaskModal extends Modal {
 				text.setPlaceholder("Onboarding rework").onChange((v) => (this.epic = v))
 			);
 
+		new Setting(contentEl)
+			.setName("Due date")
+			.setDesc("Optional.")
+			.addText((text) => {
+				text.inputEl.type = "date";
+				text.onChange((v) => (this.dueDate = v));
+			});
+
 		new Setting(contentEl).addButton((btn) =>
 			btn
 				.setButtonText("Create")
@@ -150,6 +159,7 @@ export class CreateTaskModal extends Modal {
 			: "";
 
 		const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
+		const dueDateLine = this.dueDate.trim() ? `due_date: ${this.dueDate.trim()}` : "";
 
 		const frontmatterLines = [
 			`tstatus: ${this.tstatus}`,
@@ -157,6 +167,7 @@ export class CreateTaskModal extends Modal {
 			`priority: ${this.priority}`,
 			milestoneLine,
 			epicLine,
+			dueDateLine,
 			projectLine,
 		].filter(Boolean);
 

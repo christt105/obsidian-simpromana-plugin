@@ -322,6 +322,7 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     this.priority = "medium";
     this.milestone = "";
     this.epic = "";
+    this.dueDate = "";
     this.selectedProject = null;
     this.projects = [];
     this.lockedProject = false;
@@ -369,6 +370,10 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     new import_obsidian4.Setting(contentEl).setName("Epic").setDesc("Optional label to group this task with others in the flow view.").addText(
       (text) => text.setPlaceholder("Onboarding rework").onChange((v) => this.epic = v)
     );
+    new import_obsidian4.Setting(contentEl).setName("Due date").setDesc("Optional.").addText((text) => {
+      text.inputEl.type = "date";
+      text.onChange((v) => this.dueDate = v);
+    });
     new import_obsidian4.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Create").setCta().onClick(() => this.submit())
     );
@@ -394,12 +399,14 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     const projectLine = this.selectedProject ? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}` : "project:";
     const milestoneLine = this.milestone.trim() ? `milestone: "${this.milestone.trim()}"` : "";
     const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
+    const dueDateLine = this.dueDate.trim() ? `due_date: ${this.dueDate.trim()}` : "";
     const frontmatterLines = [
       `tstatus: ${this.tstatus}`,
       "type: task",
       `priority: ${this.priority}`,
       milestoneLine,
       epicLine,
+      dueDateLine,
       projectLine
     ].filter(Boolean);
     const content = `---
@@ -3541,6 +3548,13 @@ var BoardView = class extends import_obsidian12.ItemView {
         text: record.priority
       });
     }
+    const dueState = this.dueDateState(record);
+    if (dueState) {
+      meta.createSpan({
+        cls: `spm-board-chip is-due-date is-${dueState.urgency}`,
+        text: dueState.label
+      });
+    }
     const blockers = this.blockedBy(record);
     if (blockers.length > 0) {
       this.renderBlockedBadge(card, blockers);
@@ -3555,6 +3569,19 @@ var BoardView = class extends import_obsidian12.ItemView {
     card.addEventListener("dragend", () => card.removeClass("is-dragging"));
     card.addEventListener("click", (event) => this.openTask(record.path, event));
     return card;
+  }
+  dueDateState(record) {
+    const raw = record.frontmatter.due_date;
+    if (typeof raw !== "string" || !raw.trim())
+      return null;
+    const due = /* @__PURE__ */ new Date(`${raw.trim()}T00:00:00`);
+    if (Number.isNaN(due.getTime()))
+      return null;
+    const today = /* @__PURE__ */ new Date();
+    today.setHours(0, 0, 0, 0);
+    const daysLeft = Math.round((due.getTime() - today.getTime()) / 864e5);
+    const urgency = daysLeft < 0 ? "overdue" : daysLeft <= 3 ? "soon" : "normal";
+    return { label: raw.trim(), urgency };
   }
   blockedBy(record) {
     var _a;

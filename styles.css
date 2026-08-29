@@ -537,6 +537,16 @@
 	background-color: var(--color-green);
 }
 
+.spm-board-chip.is-due-date.is-soon {
+	background-color: var(--color-yellow);
+	color: var(--text-on-accent);
+}
+
+.spm-board-chip.is-due-date.is-overdue {
+	background-color: var(--color-red);
+	color: var(--text-on-accent);
+}
+
 .spm-board-blocked {
 	margin-top: var(--size-2-1);
 }
