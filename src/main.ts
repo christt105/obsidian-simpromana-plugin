@@ -4,6 +4,7 @@ import { CreateProjectModal } from "./modals/CreateProjectModal";
 import { CreateTaskModal } from "./modals/CreateTaskModal";
 import { setupBases } from "./lib/bases";
 import { activeProjectFile, archivePath, ensureFolder } from "./lib/vault";
+import { registerRelationPropertyWidget } from "./lib/relationPropertyWidget";
 import { FLOW_VIEW_TYPE, FlowView, FlowViewState } from "./views/FlowView";
 
 export default class SimpromanaPlugin extends Plugin {
@@ -49,6 +50,12 @@ export default class SimpromanaPlugin extends Plugin {
 				}
 			},
 		});
+
+		try {
+			registerRelationPropertyWidget(this.app, this.settings);
+		} catch (err) {
+			console.error("[Simpromana] Relation property widget registration error:", err);
+		}
 
 		this.addCommand({
 			id: "archive-task",

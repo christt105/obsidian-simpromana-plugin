@@ -10,7 +10,7 @@ function declaration(draft: RelationDraft): { owner: NoteRecord; target: NoteRec
 		: { owner: draft.to, target: draft.from };
 }
 
-function wikilink(file: TFile): string {
+export function wikilink(file: TFile): string {
 	return `[[${file.path.replace(/\.md$/, "")}]]`;
 }
 

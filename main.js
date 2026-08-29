@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => SimpromanaPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian9 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -415,7 +415,7 @@ async function setupBases(app, s) {
   }
 }
 
-// src/views/FlowView.ts
+// src/lib/relationPropertyWidget.ts
 var import_obsidian8 = require("obsidian");
 
 // src/graph/relations.ts
@@ -468,6 +468,242 @@ function toTargetList(value) {
   const values = Array.isArray(value) ? value : [value];
   return values.map(parseLinkTarget).filter((target) => target !== null);
 }
+
+// src/lib/relations.ts
+var import_obsidian6 = require("obsidian");
+function declaration(draft) {
+  return draft.kind === "related" ? { owner: draft.from, target: draft.to } : { owner: draft.to, target: draft.from };
+}
+function wikilink(file) {
+  return `[[${file.path.replace(/\.md$/, "")}]]`;
+}
+async function writeRelation(app, draft) {
+  const { owner, target } = declaration(draft);
+  const file = app.vault.getAbstractFileByPath(owner.path);
+  const targetFile = app.vault.getAbstractFileByPath(target.path);
+  if (!(file instanceof import_obsidian6.TFile) || !(targetFile instanceof import_obsidian6.TFile)) {
+    throw new Error("Task file not found.");
+  }
+  const key = CANONICAL_RELATION_KEYS[draft.kind];
+  const link = wikilink(targetFile);
+  await app.fileManager.processFrontMatter(file, (frontmatter) => {
+    const current = frontmatter[key];
+    const values = Array.isArray(current) ? [...current] : current ? [current] : [];
+    const already = values.some((value) => {
+      const parsed = parseLinkTarget(value);
+      return parsed !== null && parsed.split("/").pop() === targetFile.basename;
+    });
+    if (already)
+      return;
+    values.push(link);
+    frontmatter[key] = values;
+  });
+}
+
+// src/lib/notes.ts
+var ID_PATTERN = /^(.*?)\s+-\s+([A-Za-z0-9]+)$/;
+function splitBasename(basename) {
+  const match = basename.match(ID_PATTERN);
+  return match ? { title: match[1], id: match[2] } : { title: basename, id: "" };
+}
+function stringValue(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function readNote(app, file, kind) {
+  var _a, _b, _c, _d, _e;
+  const cache = app.metadataCache.getFileCache(file);
+  const frontmatter = (_a = cache == null ? void 0 : cache.frontmatter) != null ? _a : {};
+  const { title, id } = splitBasename(file.basename);
+  const projectTarget = parseLinkTarget(frontmatter.project);
+  const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, file.path) : null;
+  return {
+    kind,
+    path: file.path,
+    basename: file.basename,
+    title,
+    id,
+    projectPath: (_b = projectFile == null ? void 0 : projectFile.path) != null ? _b : null,
+    projectName: (_d = (_c = projectFile == null ? void 0 : projectFile.basename) != null ? _c : projectTarget == null ? void 0 : projectTarget.split("/").pop()) != null ? _d : null,
+    status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
+    priority: stringValue(frontmatter.priority),
+    milestone: stringValue(frontmatter.milestone) || null,
+    frontmatter,
+    links: ((_e = cache == null ? void 0 : cache.links) != null ? _e : []).map((link) => link.link)
+  };
+}
+function collectNotes(app, settings, options) {
+  const taskPrefix = `${tasksPath(settings)}/`;
+  const referencePrefix = `${referencesPath(settings)}/`;
+  const records = [];
+  for (const file of app.vault.getMarkdownFiles()) {
+    if (file.path.startsWith(taskPrefix)) {
+      records.push(readNote(app, file, "task"));
+    } else if (options.references && file.path.startsWith(referencePrefix)) {
+      records.push(readNote(app, file, "reference"));
+    }
+  }
+  return records;
+}
+function createNoteResolver(app, records) {
+  const byBasename = /* @__PURE__ */ new Map();
+  const byId = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    if (!byBasename.has(record.basename))
+      byBasename.set(record.basename, record.path);
+    if (record.id && !byId.has(record.id))
+      byId.set(record.id, record.path);
+  }
+  return (target, sourcePath) => {
+    var _a, _b, _c;
+    const resolved = app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+    if (resolved)
+      return resolved.path;
+    const tail = (_a = target.split("/").pop()) != null ? _a : target;
+    return (_c = (_b = byBasename.get(tail)) != null ? _b : byId.get(tail)) != null ? _c : null;
+  };
+}
+function projectFiles(app, settings) {
+  const prefix = `${projectsPath(settings)}/`;
+  return app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(prefix)).sort((a, b) => a.basename.localeCompare(b.basename));
+}
+
+// src/modals/TaskSearchModal.ts
+var import_obsidian7 = require("obsidian");
+var TaskSearchModal = class extends import_obsidian7.FuzzySuggestModal {
+  constructor(app, items, onChoose) {
+    super(app);
+    this.items = items;
+    this.onChoose = onChoose;
+    this.setPlaceholder("Search tasks\u2026");
+  }
+  getItems() {
+    return this.items;
+  }
+  getItemText(file) {
+    return file.basename;
+  }
+  renderSuggestion(match, el) {
+    el.createDiv({ text: match.item.basename });
+  }
+  onChooseItem(file) {
+    this.onChoose(file);
+  }
+};
+
+// src/lib/relationPropertyWidget.ts
+var RELATION_WIDGET_TYPE = "simpromana-relation";
+var RELATION_PROPERTY_KEYS = ["blocked_by", "blocks", "continues", "continued_by", "related"];
+function toValueArray(data) {
+  if (data === null || data === void 0)
+    return [];
+  const values = Array.isArray(data) ? data : [data];
+  return values.filter((value) => typeof value === "string");
+}
+function isValidRelationValue(value) {
+  if (value === null || value === void 0)
+    return true;
+  const values = Array.isArray(value) ? value : [value];
+  return values.every((entry) => typeof entry === "string");
+}
+function resolveTarget(app, raw, sourcePath) {
+  const target = parseLinkTarget(raw);
+  if (!target)
+    return null;
+  return app.metadataCache.getFirstLinkpathDest(target, sourcePath);
+}
+function relationCandidates(app, settings, sourcePath, currentValues) {
+  var _a;
+  const sourceFile = app.vault.getAbstractFileByPath(sourcePath);
+  if (!(sourceFile instanceof import_obsidian8.TFile))
+    return [];
+  const frontmatter = (_a = app.metadataCache.getFileCache(sourceFile)) == null ? void 0 : _a.frontmatter;
+  const projectTarget = parseLinkTarget(frontmatter == null ? void 0 : frontmatter.project);
+  const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, sourcePath) : null;
+  const excluded = /* @__PURE__ */ new Set([sourceFile.path]);
+  for (const raw of currentValues) {
+    const resolved = resolveTarget(app, raw, sourcePath);
+    if (resolved)
+      excluded.add(resolved.path);
+  }
+  return collectNotes(app, settings, { references: false }).filter((record) => record.kind === "task").filter((record) => !projectFile || record.projectPath === projectFile.path).filter((record) => !excluded.has(record.path)).map((record) => app.vault.getAbstractFileByPath(record.path)).filter((file) => file instanceof import_obsidian8.TFile).sort((a, b) => a.basename.localeCompare(b.basename));
+}
+var RelationPropertyWidgetComponent = class {
+  constructor(app, settings, containerEl, data, context) {
+    this.app = app;
+    this.settings = settings;
+    this.containerEl = containerEl;
+    this.context = context;
+    this.type = RELATION_WIDGET_TYPE;
+    this.addButtonEl = null;
+    this.values = toValueArray(data);
+    this.draw();
+  }
+  focus() {
+    var _a;
+    (_a = this.addButtonEl) == null ? void 0 : _a.focus();
+  }
+  draw() {
+    this.containerEl.empty();
+    this.containerEl.addClass("spm-relation-widget");
+    for (const [index, raw] of this.values.entries()) {
+      this.drawPill(raw, index);
+    }
+    this.addButtonEl = this.containerEl.createEl("button", {
+      cls: "spm-relation-add",
+      attr: { type: "button", "aria-label": "Search tasks" }
+    });
+    (0, import_obsidian8.setIcon)(this.addButtonEl, "plus");
+    this.addButtonEl.addEventListener("click", () => this.openSearch());
+  }
+  drawPill(raw, index) {
+    var _a, _b;
+    const resolved = resolveTarget(this.app, raw, this.context.sourcePath);
+    const label = (_b = (_a = resolved == null ? void 0 : resolved.basename) != null ? _a : parseLinkTarget(raw)) != null ? _b : raw;
+    const pillEl = this.containerEl.createDiv({ cls: "spm-relation-pill" });
+    pillEl.createSpan({ cls: "spm-relation-pill-label", text: label });
+    const removeEl = pillEl.createDiv({ cls: "spm-relation-pill-remove" });
+    (0, import_obsidian8.setIcon)(removeEl, "x");
+    removeEl.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      this.values.splice(index, 1);
+      this.commit();
+    });
+  }
+  openSearch() {
+    const candidates = relationCandidates(
+      this.app,
+      this.settings,
+      this.context.sourcePath,
+      this.values
+    );
+    new TaskSearchModal(this.app, candidates, (file) => {
+      this.values.push(wikilink(file));
+      this.commit();
+    }).open();
+  }
+  commit() {
+    this.context.onChange([...this.values]);
+    this.draw();
+  }
+};
+function registerRelationPropertyWidget(app, settings) {
+  const widget = {
+    type: RELATION_WIDGET_TYPE,
+    icon: "link",
+    name: () => "Task relation",
+    validate: isValidRelationValue,
+    render: (containerEl, data, context) => new RelationPropertyWidgetComponent(app, settings, containerEl, data, context)
+  };
+  app.metadataTypeManager.registeredTypeWidgets[RELATION_WIDGET_TYPE] = widget;
+  for (const key of RELATION_PROPERTY_KEYS) {
+    if (app.metadataTypeManager.getAssignedWidget(key) !== RELATION_WIDGET_TYPE) {
+      void app.metadataTypeManager.setType(key, RELATION_WIDGET_TYPE);
+    }
+  }
+}
+
+// src/views/FlowView.ts
+var import_obsidian10 = require("obsidian");
 
 // src/graph/build.ts
 function relationId(relation) {
@@ -645,37 +881,6 @@ function rejectionReason(graph, draft) {
     return "That would close a dependency cycle.";
   }
   return null;
-}
-
-// src/lib/relations.ts
-var import_obsidian6 = require("obsidian");
-function declaration(draft) {
-  return draft.kind === "related" ? { owner: draft.from, target: draft.to } : { owner: draft.to, target: draft.from };
-}
-function wikilink(file) {
-  return `[[${file.path.replace(/\.md$/, "")}]]`;
-}
-async function writeRelation(app, draft) {
-  const { owner, target } = declaration(draft);
-  const file = app.vault.getAbstractFileByPath(owner.path);
-  const targetFile = app.vault.getAbstractFileByPath(target.path);
-  if (!(file instanceof import_obsidian6.TFile) || !(targetFile instanceof import_obsidian6.TFile)) {
-    throw new Error("Task file not found.");
-  }
-  const key = CANONICAL_RELATION_KEYS[draft.kind];
-  const link = wikilink(targetFile);
-  await app.fileManager.processFrontMatter(file, (frontmatter) => {
-    const current = frontmatter[key];
-    const values = Array.isArray(current) ? [...current] : current ? [current] : [];
-    const already = values.some((value) => {
-      const parsed = parseLinkTarget(value);
-      return parsed !== null && parsed.split("/").pop() === targetFile.basename;
-    });
-    if (already)
-      return;
-    values.push(link);
-    frontmatter[key] = values;
-  });
 }
 
 // src/graph/grouping.ts
@@ -1262,75 +1467,8 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
   return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, width, height, unlinkedTop };
 }
 
-// src/lib/notes.ts
-var ID_PATTERN = /^(.*?)\s+-\s+([A-Za-z0-9]+)$/;
-function splitBasename(basename) {
-  const match = basename.match(ID_PATTERN);
-  return match ? { title: match[1], id: match[2] } : { title: basename, id: "" };
-}
-function stringValue(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-function readNote(app, file, kind) {
-  var _a, _b, _c, _d, _e;
-  const cache = app.metadataCache.getFileCache(file);
-  const frontmatter = (_a = cache == null ? void 0 : cache.frontmatter) != null ? _a : {};
-  const { title, id } = splitBasename(file.basename);
-  const projectTarget = parseLinkTarget(frontmatter.project);
-  const projectFile = projectTarget ? app.metadataCache.getFirstLinkpathDest(projectTarget, file.path) : null;
-  return {
-    kind,
-    path: file.path,
-    basename: file.basename,
-    title,
-    id,
-    projectPath: (_b = projectFile == null ? void 0 : projectFile.path) != null ? _b : null,
-    projectName: (_d = (_c = projectFile == null ? void 0 : projectFile.basename) != null ? _c : projectTarget == null ? void 0 : projectTarget.split("/").pop()) != null ? _d : null,
-    status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
-    priority: stringValue(frontmatter.priority),
-    milestone: stringValue(frontmatter.milestone) || null,
-    frontmatter,
-    links: ((_e = cache == null ? void 0 : cache.links) != null ? _e : []).map((link) => link.link)
-  };
-}
-function collectNotes(app, settings, options) {
-  const taskPrefix = `${tasksPath(settings)}/`;
-  const referencePrefix = `${referencesPath(settings)}/`;
-  const records = [];
-  for (const file of app.vault.getMarkdownFiles()) {
-    if (file.path.startsWith(taskPrefix)) {
-      records.push(readNote(app, file, "task"));
-    } else if (options.references && file.path.startsWith(referencePrefix)) {
-      records.push(readNote(app, file, "reference"));
-    }
-  }
-  return records;
-}
-function createNoteResolver(app, records) {
-  const byBasename = /* @__PURE__ */ new Map();
-  const byId = /* @__PURE__ */ new Map();
-  for (const record of records) {
-    if (!byBasename.has(record.basename))
-      byBasename.set(record.basename, record.path);
-    if (record.id && !byId.has(record.id))
-      byId.set(record.id, record.path);
-  }
-  return (target, sourcePath) => {
-    var _a, _b, _c;
-    const resolved = app.metadataCache.getFirstLinkpathDest(target, sourcePath);
-    if (resolved)
-      return resolved.path;
-    const tail = (_a = target.split("/").pop()) != null ? _a : target;
-    return (_c = (_b = byBasename.get(tail)) != null ? _b : byId.get(tail)) != null ? _c : null;
-  };
-}
-function projectFiles(app, settings) {
-  const prefix = `${projectsPath(settings)}/`;
-  return app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(prefix)).sort((a, b) => a.basename.localeCompare(b.basename));
-}
-
 // src/views/FlowCanvas.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 
 // src/graph/force.ts
 var DEFAULT_FORCE_OPTIONS = {
@@ -2356,7 +2494,7 @@ var FlowCanvas = class {
     }
     holder.appendChild(card);
     group.appendChild(holder);
-    (0, import_obsidian7.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
+    (0, import_obsidian9.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
     return group;
   }
   tooltipFor(node) {
@@ -2427,7 +2565,7 @@ var MODE_LABELS = {
   flow: "Flow layout",
   force: "Force graph"
 };
-var FlowView = class extends import_obsidian8.ItemView {
+var FlowView = class extends import_obsidian10.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -2466,7 +2604,7 @@ var FlowView = class extends import_obsidian8.ItemView {
       onConnect: (from, to, client) => this.offerRelation(from, to, client),
       onMenu: (path, client) => this.showMenu(path, client)
     });
-    const refresh = (0, import_obsidian8.debounce)(() => this.render(false), 400, true);
+    const refresh = (0, import_obsidian10.debounce)(() => this.render(false), 400, true);
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (this.isRelevant(file.path))
@@ -2606,7 +2744,7 @@ var FlowView = class extends import_obsidian8.ItemView {
       this.connecting = !this.connecting;
       (_a = this.canvas) == null ? void 0 : _a.setConnecting(this.connecting);
       this.connectButton.toggleClass("is-active", this.connecting);
-      new import_obsidian8.Notice(
+      new import_obsidian10.Notice(
         this.connecting ? "Drag from one task to another to relate them." : "Connect mode off."
       );
     });
@@ -2617,19 +2755,19 @@ var FlowView = class extends import_obsidian8.ItemView {
       this.unpinButton.hide();
     });
     const zoomOut = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian8.setIcon)(zoomOut, "zoom-out");
+    (0, import_obsidian10.setIcon)(zoomOut, "zoom-out");
     zoomOut.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(0.8);
     });
     const zoomIn = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian8.setIcon)(zoomIn, "zoom-in");
+    (0, import_obsidian10.setIcon)(zoomIn, "zoom-in");
     zoomIn.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(1.25);
     });
     const fit = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian8.setIcon)(fit, "maximize");
+    (0, import_obsidian10.setIcon)(fit, "maximize");
     fit.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.fit();
@@ -2734,13 +2872,13 @@ var FlowView = class extends import_obsidian8.ItemView {
     }
   }
   showMenu(path, client) {
-    const menu = new import_obsidian8.Menu();
+    const menu = new import_obsidian10.Menu();
     const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
     if (record) {
       menu.addItem(
         (item) => item.setTitle("Open").setIcon("file-text").onClick(() => {
           const file = this.app.vault.getAbstractFileByPath(record.path);
-          if (file instanceof import_obsidian8.TFile)
+          if (file instanceof import_obsidian10.TFile)
             this.app.workspace.getLeaf(false).openFile(file);
         })
       );
@@ -2780,7 +2918,7 @@ var FlowView = class extends import_obsidian8.ItemView {
       { label: `\u201C${short(to.title)}\u201D continues \u201C${short(from.title)}\u201D`, kind: "continuation" },
       { label: "Related", kind: "related" }
     ];
-    const menu = new import_obsidian8.Menu();
+    const menu = new import_obsidian10.Menu();
     for (const choice of choices) {
       const draft = { from, to, kind: choice.kind };
       const rejection = rejectionReason(this.graph, draft);
@@ -2790,10 +2928,10 @@ var FlowView = class extends import_obsidian8.ItemView {
         item.onClick(async () => {
           try {
             await writeRelation(this.app, draft);
-            new import_obsidian8.Notice("Relation created.");
+            new import_obsidian10.Notice("Relation created.");
           } catch (error) {
             console.error("[Simpromana] Relation write error:", error);
-            new import_obsidian8.Notice("\u274C Could not write the relation.");
+            new import_obsidian10.Notice("\u274C Could not write the relation.");
           }
         });
       });
@@ -2802,15 +2940,15 @@ var FlowView = class extends import_obsidian8.ItemView {
   }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian8.TFile))
+    if (!(file instanceof import_obsidian10.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian8.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian10.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/main.ts
-var SimpromanaPlugin = class extends import_obsidian9.Plugin {
+var SimpromanaPlugin = class extends import_obsidian11.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SimpromanaSettingTab(this.app, this));
@@ -2839,13 +2977,18 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
       callback: async () => {
         try {
           await setupBases(this.app, this.settings);
-          new import_obsidian9.Notice("\u2705 Tasks.base updated.");
+          new import_obsidian11.Notice("\u2705 Tasks.base updated.");
         } catch (err) {
           console.error("[Simpromana] Setup bases error:", err);
-          new import_obsidian9.Notice("\u274C Failed to update Tasks.base.");
+          new import_obsidian11.Notice("\u274C Failed to update Tasks.base.");
         }
       }
     });
+    try {
+      registerRelationPropertyWidget(this.app, this.settings);
+    } catch (err) {
+      console.error("[Simpromana] Relation property widget registration error:", err);
+    }
     this.addCommand({
       id: "archive-task",
       name: "Archive current task",
@@ -2864,7 +3007,7 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
     });
   }
   confirmArchiveTask(file) {
-    const modal = new import_obsidian9.ConfirmationModal(this.app);
+    const modal = new import_obsidian11.ConfirmationModal(this.app);
     modal.setTitle("Archive task");
     modal.setContent(
       `Set "${file.basename}" to tstatus: Archive and move it into "${this.settings.archiveFolder}"?`
@@ -2882,12 +3025,12 @@ var SimpromanaPlugin = class extends import_obsidian9.Plugin {
       });
       const folder = archivePath(this.settings);
       await ensureFolder(this.app, folder);
-      const newPath = (0, import_obsidian9.normalizePath)(`${folder}/${file.name}`);
+      const newPath = (0, import_obsidian11.normalizePath)(`${folder}/${file.name}`);
       await this.app.fileManager.renameFile(file, newPath);
-      new import_obsidian9.Notice(`\u2705 Task "${file.basename}" archived.`);
+      new import_obsidian11.Notice(`\u2705 Task "${file.basename}" archived.`);
     } catch (err) {
       console.error("[Simpromana] Archive task error:", err);
-      new import_obsidian9.Notice("\u274C Failed to archive task.");
+      new import_obsidian11.Notice("\u274C Failed to archive task.");
     }
   }
   async openFlowView() {
