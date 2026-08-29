@@ -6,6 +6,7 @@ import { setupBases } from "./lib/bases";
 import { activeProjectFile } from "./lib/vault";
 import { FLOW_VIEW_TYPE, FlowView, FlowViewState } from "./views/FlowView";
 import { BOARD_VIEW_TYPE, BoardView } from "./views/BoardView";
+import { PROJECT_PANEL_VIEW_TYPE, ProjectPanelView } from "./views/ProjectPanelView";
 
 export default class SimpromanaPlugin extends Plugin {
 	settings: SimpromanaSettings;
@@ -22,6 +23,10 @@ export default class SimpromanaPlugin extends Plugin {
 			BOARD_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new BoardView(leaf, this.settings)
 		);
+		this.registerView(
+			PROJECT_PANEL_VIEW_TYPE,
+			(leaf: WorkspaceLeaf) => new ProjectPanelView(leaf, this.settings)
+		);
 
 		this.addCommand({
 			id: "open-task-flow",
@@ -33,6 +38,12 @@ export default class SimpromanaPlugin extends Plugin {
 			id: "open-board",
 			name: "Open Board",
 			callback: () => this.openBoardView(),
+		});
+
+		this.addCommand({
+			id: "open-project-panel",
+			name: "Open project panel",
+			callback: () => this.openProjectPanel(),
 		});
 
 		this.addCommand({
@@ -76,6 +87,18 @@ export default class SimpromanaPlugin extends Plugin {
 		const { workspace } = this.app;
 		const leaf = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0] ?? workspace.getLeaf("tab");
 		await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
+		await workspace.revealLeaf(leaf);
+	}
+
+	async openProjectPanel(): Promise<void> {
+		const { workspace } = this.app;
+		let leaf = workspace.getLeavesOfType(PROJECT_PANEL_VIEW_TYPE)[0];
+		if (!leaf) {
+			const rightLeaf = workspace.getRightLeaf(false);
+			if (!rightLeaf) return;
+			leaf = rightLeaf;
+			await leaf.setViewState({ type: PROJECT_PANEL_VIEW_TYPE, active: true });
+		}
 		await workspace.revealLeaf(leaf);
 	}
 

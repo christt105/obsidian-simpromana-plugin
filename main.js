@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => SimpromanaPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian10 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -239,9 +239,10 @@ var PRIORITY_OPTIONS2 = {
 };
 var NO_PROJECT = "__none__";
 var CreateTaskModal = class extends import_obsidian4.Modal {
-  constructor(app, settings) {
+  constructor(app, settings, presetProject = null) {
     super(app);
     this.settings = settings;
+    this.presetProject = presetProject;
     this.taskName = "";
     this.tstatus = "Todo";
     this.priority = "medium";
@@ -251,11 +252,12 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     this.lockedProject = false;
   }
   async onOpen() {
+    var _a;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", { text: "New task" });
     this.projects = await getAllProjects(this.app, this.settings);
-    const contextProject = activeProjectFile(this.app, this.settings);
+    const contextProject = (_a = this.presetProject) != null ? _a : activeProjectFile(this.app, this.settings);
     if (contextProject) {
       this.selectedProject = contextProject;
       this.lockedProject = true;
@@ -3026,8 +3028,167 @@ var BoardView = class extends import_obsidian9.ItemView {
   }
 };
 
+// src/views/ProjectPanelView.ts
+var import_obsidian10 = require("obsidian");
+var PROJECT_PANEL_VIEW_TYPE = "simpromana-project-panel";
+var STATUS_ORDER2 = ["Doing", "Review", "Todo", "Done", "Archive", "Archived"];
+function statusRank(status) {
+  const index = STATUS_ORDER2.indexOf(status);
+  return index === -1 ? STATUS_ORDER2.length : index;
+}
+var ProjectPanelView = class extends import_obsidian10.ItemView {
+  constructor(leaf, settings) {
+    super(leaf);
+    this.settings = settings;
+    this.projectFile = null;
+  }
+  getViewType() {
+    return PROJECT_PANEL_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "Project panel";
+  }
+  getIcon() {
+    return "layout-list";
+  }
+  async onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.addClass("spm-panel");
+    this.headerEl = root.createDiv({ cls: "spm-panel-header" });
+    this.bodyEl = root.createDiv({ cls: "spm-panel-body" });
+    const refresh = (0, import_obsidian10.debounce)(() => this.render(), 200, true);
+    this.registerEvent(this.app.workspace.on("active-leaf-change", refresh));
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (this.isRelevant(file.path))
+          refresh();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (this.isRelevant(file.path) || this.isRelevant(oldPath))
+          refresh();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (this.isRelevant(file.path))
+          refresh();
+      })
+    );
+    this.render();
+  }
+  async onClose() {
+  }
+  isRelevant(path) {
+    return path.startsWith(`${tasksPath(this.settings)}/`) || path.startsWith(`${referencesPath(this.settings)}/`) || path.startsWith(`${projectsPath(this.settings)}/`);
+  }
+  render() {
+    this.projectFile = activeProjectFile(this.app, this.settings);
+    this.headerEl.empty();
+    this.bodyEl.empty();
+    if (!this.projectFile) {
+      this.bodyEl.createDiv({
+        cls: "spm-panel-empty",
+        text: "Open a project note to see its panel."
+      });
+      return;
+    }
+    const projectFile = this.projectFile;
+    this.headerEl.createEl("h3", { text: projectFile.basename });
+    this.renderNewTaskButton(projectFile);
+    const records = collectNotes(this.app, this.settings, { references: true });
+    const tasks = records.filter(
+      (record) => record.kind === "task" && record.projectPath === projectFile.path
+    );
+    const references = records.filter(
+      (record) => record.kind === "reference" && record.projectPath === projectFile.path
+    );
+    this.renderProgress(tasks);
+    if (tasks.length === 0) {
+      this.bodyEl.createDiv({ cls: "spm-panel-empty", text: "No tasks in this project yet." });
+    } else {
+      this.renderTaskGroups(tasks);
+    }
+    this.renderReferences(references);
+  }
+  renderProgress(tasks) {
+    const counted = tasks.filter((task) => task.status !== "Archive" && task.status !== "Archived");
+    if (counted.length === 0)
+      return;
+    const done = counted.filter((task) => task.status === "Done").length;
+    const percent = Math.round(done / counted.length * 100);
+    const wrap = this.bodyEl.createDiv({ cls: "spm-panel-progress" });
+    wrap.createDiv({
+      cls: "spm-panel-progress-label",
+      text: `${done} / ${counted.length} done`
+    });
+    const track = wrap.createDiv({ cls: "spm-panel-progress-track" });
+    const fill = track.createDiv({ cls: "spm-panel-progress-fill" });
+    fill.style.width = `${percent}%`;
+  }
+  renderReferences(references) {
+    if (references.length === 0)
+      return;
+    const section = this.bodyEl.createDiv({ cls: "spm-panel-group" });
+    section.createEl("h4", { text: `References (${references.length})` });
+    const list = section.createEl("ul", { cls: "spm-panel-list" });
+    for (const reference of references.sort((a, b) => a.title.localeCompare(b.title))) {
+      this.renderNoteItem(list, reference);
+    }
+  }
+  renderNewTaskButton(projectFile) {
+    const button = this.headerEl.createEl("button", {
+      cls: "spm-panel-new-task",
+      text: "+ New task"
+    });
+    button.addEventListener("click", () => {
+      new CreateTaskModal(this.app, this.settings, projectFile).open();
+    });
+  }
+  renderTaskGroups(tasks) {
+    var _a;
+    const groups = /* @__PURE__ */ new Map();
+    for (const task of tasks) {
+      const key = task.status || "Todo";
+      const bucket = (_a = groups.get(key)) != null ? _a : [];
+      bucket.push(task);
+      groups.set(key, bucket);
+    }
+    const orderedKeys = [...groups.keys()].sort((a, b) => {
+      const rank = statusRank(a) - statusRank(b);
+      return rank !== 0 ? rank : a.localeCompare(b);
+    });
+    for (const status of orderedKeys) {
+      const items = groups.get(status).sort((a, b) => a.title.localeCompare(b.title));
+      const section = this.bodyEl.createDiv({ cls: "spm-panel-group" });
+      section.createEl("h4", { text: `${status} (${items.length})` });
+      const list = section.createEl("ul", { cls: "spm-panel-list" });
+      for (const task of items) {
+        this.renderNoteItem(list, task);
+      }
+    }
+  }
+  renderNoteItem(list, record) {
+    const item = list.createEl("li", { cls: "spm-panel-item" });
+    const link = item.createEl("a", { cls: "spm-panel-link", text: record.title, href: "#" });
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      this.openNote(record.path, event);
+    });
+  }
+  openNote(path, event) {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof import_obsidian10.TFile))
+      return;
+    const leaf = this.app.workspace.getLeaf(import_obsidian10.Keymap.isModEvent(event));
+    leaf.openFile(file);
+  }
+};
+
 // src/main.ts
-var SimpromanaPlugin = class extends import_obsidian10.Plugin {
+var SimpromanaPlugin = class extends import_obsidian11.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SimpromanaSettingTab(this.app, this));
@@ -3039,6 +3200,10 @@ var SimpromanaPlugin = class extends import_obsidian10.Plugin {
       BOARD_VIEW_TYPE,
       (leaf) => new BoardView(leaf, this.settings)
     );
+    this.registerView(
+      PROJECT_PANEL_VIEW_TYPE,
+      (leaf) => new ProjectPanelView(leaf, this.settings)
+    );
     this.addCommand({
       id: "open-task-flow",
       name: "Open task flow",
@@ -3048,6 +3213,11 @@ var SimpromanaPlugin = class extends import_obsidian10.Plugin {
       id: "open-board",
       name: "Open Board",
       callback: () => this.openBoardView()
+    });
+    this.addCommand({
+      id: "open-project-panel",
+      name: "Open project panel",
+      callback: () => this.openProjectPanel()
     });
     this.addCommand({
       id: "create-project",
@@ -3065,10 +3235,10 @@ var SimpromanaPlugin = class extends import_obsidian10.Plugin {
       callback: async () => {
         try {
           await setupBases(this.app, this.settings);
-          new import_obsidian10.Notice("\u2705 Tasks.base updated.");
+          new import_obsidian11.Notice("\u2705 Tasks.base updated.");
         } catch (err) {
           console.error("[Simpromana] Setup bases error:", err);
-          new import_obsidian10.Notice("\u274C Failed to update Tasks.base.");
+          new import_obsidian11.Notice("\u274C Failed to update Tasks.base.");
         }
       }
     });
@@ -3087,6 +3257,18 @@ var SimpromanaPlugin = class extends import_obsidian10.Plugin {
     const { workspace } = this.app;
     const leaf = (_a = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0]) != null ? _a : workspace.getLeaf("tab");
     await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
+    await workspace.revealLeaf(leaf);
+  }
+  async openProjectPanel() {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(PROJECT_PANEL_VIEW_TYPE)[0];
+    if (!leaf) {
+      const rightLeaf = workspace.getRightLeaf(false);
+      if (!rightLeaf)
+        return;
+      leaf = rightLeaf;
+      await leaf.setViewState({ type: PROJECT_PANEL_VIEW_TYPE, active: true });
+    }
     await workspace.revealLeaf(leaf);
   }
   async loadSettings() {
