@@ -29,6 +29,7 @@ export class CreateTaskModal extends Modal {
 	private tstatus = "Todo";
 	private priority = "medium";
 	private milestone = "";
+	private epic = "";
 	private selectedProject: TFile | null = null;
 	private projects: TFile[] = [];
 	private lockedProject = false;
@@ -103,6 +104,13 @@ export class CreateTaskModal extends Modal {
 				text.setPlaceholder("v1.0").onChange((v) => (this.milestone = v))
 			);
 
+		new Setting(contentEl)
+			.setName("Epic")
+			.setDesc("Optional label to group this task with others in the flow view.")
+			.addText((text) =>
+				text.setPlaceholder("Onboarding rework").onChange((v) => (this.epic = v))
+			);
+
 		new Setting(contentEl).addButton((btn) =>
 			btn
 				.setButtonText("Create")
@@ -141,11 +149,14 @@ export class CreateTaskModal extends Modal {
 			? `milestone: "${this.milestone.trim()}"`
 			: "";
 
+		const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
+
 		const frontmatterLines = [
 			`tstatus: ${this.tstatus}`,
 			"type: task",
 			`priority: ${this.priority}`,
 			milestoneLine,
+			epicLine,
 			projectLine,
 		].filter(Boolean);
 

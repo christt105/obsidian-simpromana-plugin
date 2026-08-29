@@ -318,6 +318,7 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     this.tstatus = "Todo";
     this.priority = "medium";
     this.milestone = "";
+    this.epic = "";
     this.selectedProject = null;
     this.projects = [];
     this.lockedProject = false;
@@ -362,6 +363,9 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     new import_obsidian4.Setting(contentEl).setName("Milestone").setDesc("Optional version or milestone label.").addText(
       (text) => text.setPlaceholder("v1.0").onChange((v) => this.milestone = v)
     );
+    new import_obsidian4.Setting(contentEl).setName("Epic").setDesc("Optional label to group this task with others in the flow view.").addText(
+      (text) => text.setPlaceholder("Onboarding rework").onChange((v) => this.epic = v)
+    );
     new import_obsidian4.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Create").setCta().onClick(() => this.submit())
     );
@@ -386,11 +390,13 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     const filePath = (0, import_obsidian4.normalizePath)(`${folder}/${fileName}`);
     const projectLine = this.selectedProject ? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}` : "project:";
     const milestoneLine = this.milestone.trim() ? `milestone: "${this.milestone.trim()}"` : "";
+    const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
     const frontmatterLines = [
       `tstatus: ${this.tstatus}`,
       "type: task",
       `priority: ${this.priority}`,
       milestoneLine,
+      epicLine,
       projectLine
     ].filter(Boolean);
     const content = `---
@@ -790,6 +796,7 @@ function compareGroups(a, b) {
 }
 
 // src/graph/layout.ts
+var EPIC_PADDING = 20;
 var DEFAULT_LAYOUT_OPTIONS = {
   nodeWidth: 210,
   nodeHeight: 76,
@@ -1316,7 +1323,36 @@ function layoutGraph(graph, options = DEFAULT_LAYOUT_OPTIONS) {
   }
   const width = layoutNodes.reduce((max, node) => Math.max(max, node.x + node.width), 0);
   const height = layoutNodes.reduce((max, node) => Math.max(max, node.y + node.height), 0);
-  return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, width, height, unlinkedTop };
+  const epics = computeEpicGroups(layoutNodes, EPIC_PADDING);
+  return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, epics, width, height, unlinkedTop };
+}
+function computeEpicGroups(nodes, padding) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const node of nodes) {
+    const epic = node.record.epic;
+    if (!epic)
+      continue;
+    const list = buckets.get(epic);
+    if (list)
+      list.push(node);
+    else
+      buckets.set(epic, [node]);
+  }
+  const epics = [];
+  for (const [label, members] of buckets) {
+    const minX = Math.min(...members.map((node) => node.x));
+    const minY = Math.min(...members.map((node) => node.y));
+    const maxX = Math.max(...members.map((node) => node.x + node.width));
+    const maxY = Math.max(...members.map((node) => node.y + node.height));
+    epics.push({
+      label,
+      x: minX - padding,
+      y: minY - padding,
+      width: maxX - minX + padding * 2,
+      height: maxY - minY + padding * 2
+    });
+  }
+  return epics;
 }
 
 // src/graph/force.ts
@@ -1603,6 +1639,7 @@ function readNote(app, file, kind) {
     status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
     priority: stringValue(frontmatter.priority),
     milestone: stringValue(frontmatter.milestone) || null,
+    epic: stringValue(frontmatter.epic) || null,
     frontmatter,
     links: ((_e = cache == null ? void 0 : cache.links) != null ? _e : []).map((link) => link.link)
   };
@@ -2050,6 +2087,8 @@ var FlowCanvas = class {
     this.layout = null;
     this.nodeElements = /* @__PURE__ */ new Map();
     this.edgeElements = [];
+    this.epicElements = /* @__PURE__ */ new Map();
+    this.epicMembers = /* @__PURE__ */ new Map();
     this.neighbours = /* @__PURE__ */ new Map();
     this.hitAreas = [];
     this.hovered = null;
@@ -2073,8 +2112,10 @@ var FlowCanvas = class {
     this.svg = svgEl("svg", { class: "spm-flow-svg" });
     this.svg.appendChild(this.buildDefs());
     this.viewport = svgEl("g", { class: "spm-flow-viewport" });
+    this.epicLayer = svgEl("g", { class: "spm-flow-epics" });
     this.edgeLayer = svgEl("g", { class: "spm-flow-edges" });
     this.nodeLayer = svgEl("g", { class: "spm-flow-nodes" });
+    this.viewport.appendChild(this.epicLayer);
     this.viewport.appendChild(this.edgeLayer);
     this.viewport.appendChild(this.nodeLayer);
     this.svg.appendChild(this.viewport);
@@ -2116,6 +2157,21 @@ var FlowCanvas = class {
     this.hovered = null;
     this.tapConnectFrom = null;
     this.svg.toggleClass("is-connecting", this.connecting);
+    this.epicLayer.empty();
+    this.epicElements.clear();
+    this.epicMembers.clear();
+    for (const epic of layout.epics) {
+      this.epicElements.set(epic.label, this.buildEpic(epic));
+    }
+    for (const node of layout.nodes) {
+      if (!node.record.epic)
+        continue;
+      const members = this.epicMembers.get(node.record.epic);
+      if (members)
+        members.push(node.record.path);
+      else
+        this.epicMembers.set(node.record.epic, [node.record.path]);
+    }
     if (this.mode === "flow") {
       if (layout.unlinkedTop !== null) {
         this.edgeLayer.appendChild(this.buildUnlinkedDivider(layout));
@@ -2235,6 +2291,32 @@ var FlowCanvas = class {
         "d",
         curveBetween(borderPoint(from, to), borderPoint(to, from))
       );
+    }
+    for (const [label, paths] of this.epicMembers) {
+      const elements = this.epicElements.get(label);
+      if (!elements)
+        continue;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const path of paths) {
+        const node = simulation.get(path);
+        if (!node)
+          continue;
+        minX = Math.min(minX, node.x - node.width / 2);
+        minY = Math.min(minY, node.y - node.height / 2);
+        maxX = Math.max(maxX, node.x + node.width / 2);
+        maxY = Math.max(maxY, node.y + node.height / 2);
+      }
+      if (minX === Infinity)
+        continue;
+      elements.rect.setAttribute("x", String(minX - EPIC_PADDING));
+      elements.rect.setAttribute("y", String(minY - EPIC_PADDING));
+      elements.rect.setAttribute("width", String(maxX - minX + EPIC_PADDING * 2));
+      elements.rect.setAttribute("height", String(maxY - minY + EPIC_PADDING * 2));
+      elements.label.setAttribute("x", String(minX - EPIC_PADDING + 10));
+      elements.label.setAttribute("y", String(minY - EPIC_PADDING + 18));
     }
   }
   setConnecting(connecting) {
@@ -2452,6 +2534,22 @@ var FlowCanvas = class {
       })
     );
     return element;
+  }
+  buildEpic(epic) {
+    const group = svgEl("g", { class: "spm-flow-epic" });
+    const rect = svgEl("rect", {
+      x: String(epic.x),
+      y: String(epic.y),
+      width: String(epic.width),
+      height: String(epic.height),
+      rx: "12"
+    });
+    const label = svgEl("text", { x: String(epic.x + 10), y: String(epic.y + 18) });
+    label.textContent = epic.label;
+    group.appendChild(rect);
+    group.appendChild(label);
+    this.epicLayer.appendChild(group);
+    return { rect, label };
   }
   buildEdge(edge) {
     const kind = edge.cyclic ? "cycle" : edge.relation.kind;

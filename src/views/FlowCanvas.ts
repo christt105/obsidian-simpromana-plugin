@@ -1,5 +1,6 @@
 import { setTooltip } from "obsidian";
-import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode } from "../graph/layout";
+import type { GraphLayout, LayoutEdge, LayoutEpic, LayoutGroup, LayoutNode } from "../graph/layout";
+import { EPIC_PADDING } from "../graph/layout";
 import type { NoteRelation } from "../graph/model";
 import { DEFAULT_FORCE_OPTIONS, ForceSimulation } from "../graph/force";
 import type { ForceNode, ForceOptions } from "../graph/force";
@@ -89,12 +90,15 @@ function statusSlug(status: string): string {
 export class FlowCanvas {
 	private svg: SVGSVGElement;
 	private viewport: SVGGElement;
+	private epicLayer: SVGGElement;
 	private edgeLayer: SVGGElement;
 	private nodeLayer: SVGGElement;
 	private gestures: CanvasGestures;
 	private layout: GraphLayout | null = null;
 	private nodeElements = new Map<string, SVGGElement>();
 	private edgeElements: { element: SVGPathElement; relation: NoteRelation }[] = [];
+	private epicElements = new Map<string, { rect: SVGRectElement; label: SVGTextElement }>();
+	private epicMembers = new Map<string, string[]>();
 	private neighbours = new Map<string, Set<string>>();
 	private hitAreas: HitArea[] = [];
 	private hovered: string | null = null;
@@ -116,8 +120,10 @@ export class FlowCanvas {
 		this.svg.appendChild(this.buildDefs());
 
 		this.viewport = svgEl("g", { class: "spm-flow-viewport" });
+		this.epicLayer = svgEl("g", { class: "spm-flow-epics" });
 		this.edgeLayer = svgEl("g", { class: "spm-flow-edges" });
 		this.nodeLayer = svgEl("g", { class: "spm-flow-nodes" });
+		this.viewport.appendChild(this.epicLayer);
 		this.viewport.appendChild(this.edgeLayer);
 		this.viewport.appendChild(this.nodeLayer);
 		this.svg.appendChild(this.viewport);
@@ -165,6 +171,19 @@ export class FlowCanvas {
 		this.hovered = null;
 		this.tapConnectFrom = null;
 		this.svg.toggleClass("is-connecting", this.connecting);
+
+		this.epicLayer.empty();
+		this.epicElements.clear();
+		this.epicMembers.clear();
+		for (const epic of layout.epics) {
+			this.epicElements.set(epic.label, this.buildEpic(epic));
+		}
+		for (const node of layout.nodes) {
+			if (!node.record.epic) continue;
+			const members = this.epicMembers.get(node.record.epic);
+			if (members) members.push(node.record.path);
+			else this.epicMembers.set(node.record.epic, [node.record.path]);
+		}
 
 		if (this.mode === "flow") {
 			if (layout.unlinkedTop !== null) {
@@ -293,6 +312,32 @@ export class FlowCanvas {
 				"d",
 				curveBetween(borderPoint(from, to), borderPoint(to, from))
 			);
+		}
+
+		for (const [label, paths] of this.epicMembers) {
+			const elements = this.epicElements.get(label);
+			if (!elements) continue;
+
+			let minX = Infinity;
+			let minY = Infinity;
+			let maxX = -Infinity;
+			let maxY = -Infinity;
+			for (const path of paths) {
+				const node = simulation.get(path);
+				if (!node) continue;
+				minX = Math.min(minX, node.x - node.width / 2);
+				minY = Math.min(minY, node.y - node.height / 2);
+				maxX = Math.max(maxX, node.x + node.width / 2);
+				maxY = Math.max(maxY, node.y + node.height / 2);
+			}
+			if (minX === Infinity) continue;
+
+			elements.rect.setAttribute("x", String(minX - EPIC_PADDING));
+			elements.rect.setAttribute("y", String(minY - EPIC_PADDING));
+			elements.rect.setAttribute("width", String(maxX - minX + EPIC_PADDING * 2));
+			elements.rect.setAttribute("height", String(maxY - minY + EPIC_PADDING * 2));
+			elements.label.setAttribute("x", String(minX - EPIC_PADDING + 10));
+			elements.label.setAttribute("y", String(minY - EPIC_PADDING + 18));
 		}
 	}
 
@@ -533,6 +578,23 @@ export class FlowCanvas {
 			})
 		);
 		return element;
+	}
+
+	private buildEpic(epic: LayoutEpic): { rect: SVGRectElement; label: SVGTextElement } {
+		const group = svgEl("g", { class: "spm-flow-epic" });
+		const rect = svgEl("rect", {
+			x: String(epic.x),
+			y: String(epic.y),
+			width: String(epic.width),
+			height: String(epic.height),
+			rx: "12",
+		});
+		const label = svgEl("text", { x: String(epic.x + 10), y: String(epic.y + 18) });
+		label.textContent = epic.label;
+		group.appendChild(rect);
+		group.appendChild(label);
+		this.epicLayer.appendChild(group);
+		return { rect, label };
 	}
 
 	private buildEdge(edge: LayoutEdge): SVGPathElement {

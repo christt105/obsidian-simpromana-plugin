@@ -31,14 +31,25 @@ export interface LayoutGroup {
 	width: number;
 }
 
+export interface LayoutEpic {
+	label: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
 export interface GraphLayout {
 	nodes: LayoutNode[];
 	edges: LayoutEdge[];
 	groups: LayoutGroup[];
+	epics: LayoutEpic[];
 	width: number;
 	height: number;
 	unlinkedTop: number | null;
 }
+
+export const EPIC_PADDING = 20;
 
 export interface LayoutOptions {
 	nodeWidth: number;
@@ -653,6 +664,35 @@ export function layoutGraph(graph: NoteGraph, options: LayoutOptions = DEFAULT_L
 
 	const width = layoutNodes.reduce((max, node) => Math.max(max, node.x + node.width), 0);
 	const height = layoutNodes.reduce((max, node) => Math.max(max, node.y + node.height), 0);
+	const epics = computeEpicGroups(layoutNodes, EPIC_PADDING);
 
-	return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, width, height, unlinkedTop };
+	return { nodes: layoutNodes, edges: layoutEdges, groups: layoutGroups, epics, width, height, unlinkedTop };
+}
+
+/** Bounding box of the tasks sharing an `epic` frontmatter value, for the flow canvas to draw behind them. */
+function computeEpicGroups(nodes: LayoutNode[], padding: number): LayoutEpic[] {
+	const buckets = new Map<string, LayoutNode[]>();
+	for (const node of nodes) {
+		const epic = node.record.epic;
+		if (!epic) continue;
+		const list = buckets.get(epic);
+		if (list) list.push(node);
+		else buckets.set(epic, [node]);
+	}
+
+	const epics: LayoutEpic[] = [];
+	for (const [label, members] of buckets) {
+		const minX = Math.min(...members.map((node) => node.x));
+		const minY = Math.min(...members.map((node) => node.y));
+		const maxX = Math.max(...members.map((node) => node.x + node.width));
+		const maxY = Math.max(...members.map((node) => node.y + node.height));
+		epics.push({
+			label,
+			x: minX - padding,
+			y: minY - padding,
+			width: maxX - minX + padding * 2,
+			height: maxY - minY + padding * 2,
+		});
+	}
+	return epics;
 }

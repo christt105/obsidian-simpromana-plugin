@@ -229,6 +229,24 @@
 	font-size: 12px;
 }
 
+.spm-flow-epic rect {
+	fill: var(--interactive-accent);
+	fill-opacity: 0.05;
+	stroke: var(--interactive-accent);
+	stroke-opacity: 0.5;
+	stroke-width: 1.5;
+	stroke-dasharray: 6 4;
+}
+
+.spm-flow-epic text {
+	fill: var(--interactive-accent);
+	opacity: 0.7;
+	font-size: 12px;
+	font-weight: var(--font-semibold);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
 .spm-flow-group text {
 	fill: var(--text-muted);
 	font-size: 14px;
