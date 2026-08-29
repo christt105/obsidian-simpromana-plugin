@@ -5,6 +5,7 @@ import { CreateTaskModal } from "./modals/CreateTaskModal";
 import { setupBases } from "./lib/bases";
 import { activeProjectFile } from "./lib/vault";
 import { FLOW_VIEW_TYPE, FlowView, FlowViewState } from "./views/FlowView";
+import { BOARD_VIEW_TYPE, BoardView } from "./views/BoardView";
 
 export default class SimpromanaPlugin extends Plugin {
 	settings: SimpromanaSettings;
@@ -17,11 +18,21 @@ export default class SimpromanaPlugin extends Plugin {
 			FLOW_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new FlowView(leaf, this.settings)
 		);
+		this.registerView(
+			BOARD_VIEW_TYPE,
+			(leaf: WorkspaceLeaf) => new BoardView(leaf, this.settings)
+		);
 
 		this.addCommand({
 			id: "open-task-flow",
 			name: "Open task flow",
 			callback: () => this.openFlowView(),
+		});
+
+		this.addCommand({
+			id: "open-board",
+			name: "Open Board",
+			callback: () => this.openBoardView(),
 		});
 
 		this.addCommand({
@@ -58,6 +69,13 @@ export default class SimpromanaPlugin extends Plugin {
 		const state: FlowViewState = project ? { projectPath: project.path } : {};
 
 		await leaf.setViewState({ type: FLOW_VIEW_TYPE, active: true, state });
+		await workspace.revealLeaf(leaf);
+	}
+
+	async openBoardView(): Promise<void> {
+		const { workspace } = this.app;
+		const leaf = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0] ?? workspace.getLeaf("tab");
+		await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
 		await workspace.revealLeaf(leaf);
 	}
 
