@@ -8,6 +8,7 @@ import type { DragPhase, Point, Transform } from "./CanvasGestures";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const FIT_PADDING = 32;
+const EDGE_HIT_TOLERANCE = 8;
 
 export type CanvasMode = "flow" | "force";
 
@@ -23,6 +24,7 @@ interface CanvasHandlers {
 	onOpenTask(path: string, event: PointerEvent): void;
 	onConnect(from: string, to: string, client: Point): void;
 	onMenu(path: string | null, client: Point): void;
+	onEdgeMenu(relation: NoteRelation, client: Point): void;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(
@@ -92,7 +94,7 @@ export class FlowCanvas {
 	private gestures: CanvasGestures;
 	private layout: GraphLayout | null = null;
 	private nodeElements = new Map<string, SVGGElement>();
-	private edgeElements: { element: SVGPathElement; from: string; to: string }[] = [];
+	private edgeElements: { element: SVGPathElement; relation: NoteRelation }[] = [];
 	private neighbours = new Map<string, Set<string>>();
 	private hitAreas: HitArea[] = [];
 	private hovered: string | null = null;
@@ -128,7 +130,7 @@ export class FlowCanvas {
 			nodeAt: (point) =>
 				this.mode === "force" || this.connecting ? this.hitTest(point) : null,
 			onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
-			onContextMenu: (point, client) => this.handlers.onMenu(this.hitTest(point), client),
+			onContextMenu: (point, client) => this.onContextMenu(point, client),
 		});
 
 		this.observer = new ResizeObserver(() => {
@@ -277,8 +279,8 @@ export class FlowCanvas {
 		}
 
 		for (const edge of this.edgeElements) {
-			const from = simulation.get(edge.from);
-			const to = simulation.get(edge.to);
+			const from = simulation.get(edge.relation.from);
+			const to = simulation.get(edge.relation.to);
 			if (!from || !to) continue;
 			edge.element.setAttribute(
 				"d",
@@ -385,6 +387,44 @@ export class FlowCanvas {
 		return null;
 	}
 
+	private distanceToPath(path: SVGPathElement, point: Point): number {
+		const length = path.getTotalLength();
+		if (length === 0) return Infinity;
+		const samples = Math.min(40, Math.max(8, Math.round(length / 12)));
+		let minDistance = Infinity;
+		for (let index = 0; index <= samples; index++) {
+			const sample = path.getPointAtLength((length * index) / samples);
+			minDistance = Math.min(minDistance, Math.hypot(sample.x - point.x, sample.y - point.y));
+		}
+		return minDistance;
+	}
+
+	private hitTestEdge(point: Point): NoteRelation | null {
+		const tolerance = EDGE_HIT_TOLERANCE / this.gestures.transform.k;
+		let closest: { relation: NoteRelation; distance: number } | null = null;
+		for (const edge of this.edgeElements) {
+			const distance = this.distanceToPath(edge.element, point);
+			if (distance <= tolerance && (!closest || distance < closest.distance)) {
+				closest = { relation: edge.relation, distance };
+			}
+		}
+		return closest?.relation ?? null;
+	}
+
+	private onContextMenu(point: Point, client: Point): void {
+		const nodePath = this.hitTest(point);
+		if (nodePath) {
+			this.handlers.onMenu(nodePath, client);
+			return;
+		}
+		const edge = this.hitTestEdge(point);
+		if (edge) {
+			this.handlers.onEdgeMenu(edge, client);
+			return;
+		}
+		this.handlers.onMenu(null, client);
+	}
+
 	private onTap(point: Point, event: PointerEvent): void {
 		const path = this.hitTest(point);
 		if (path) this.handlers.onOpenTask(path, event);
@@ -465,7 +505,7 @@ export class FlowCanvas {
 		if (!isUndirected(edge)) {
 			path.setAttribute("marker-end", `url(#spm-arrow-${kind})`);
 		}
-		this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
+		this.edgeElements.push({ element: path, relation: edge.relation });
 		return path;
 	}
 
@@ -554,7 +594,7 @@ export class FlowCanvas {
 			element.toggleClass("is-focus", nodePath === path);
 		}
 		for (const edge of this.edgeElements) {
-			const active = edge.from === path || edge.to === path;
+			const active = edge.relation.from === path || edge.relation.to === path;
 			edge.element.toggleClass("is-faded", !active);
 			edge.element.toggleClass("is-active", active);
 		}

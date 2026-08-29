@@ -674,6 +674,38 @@ async function writeRelation(app, draft) {
     frontmatter[key] = values;
   });
 }
+async function stripRelationFromNote(app, note, other, kind) {
+  const file = app.vault.getAbstractFileByPath(note.path);
+  if (!(file instanceof import_obsidian6.TFile))
+    return;
+  await app.fileManager.processFrontMatter(file, (frontmatter) => {
+    for (const key of Object.keys(frontmatter)) {
+      const relationKey = relationKeyOf(key);
+      if (!relationKey || relationKey.kind !== kind)
+        continue;
+      const current = frontmatter[key];
+      const values = Array.isArray(current) ? current : current ? [current] : [];
+      const remaining = values.filter((value) => {
+        const parsed = parseLinkTarget(value);
+        return parsed === null || parsed.split("/").pop() !== other.basename;
+      });
+      if (remaining.length === values.length)
+        continue;
+      if (remaining.length === 0)
+        delete frontmatter[key];
+      else
+        frontmatter[key] = remaining;
+    }
+  });
+}
+async function deleteRelation(app, from, to, kind) {
+  await stripRelationFromNote(app, from, to, kind);
+  await stripRelationFromNote(app, to, from, kind);
+}
+async function changeRelationKind(app, from, to, fromKind, toKind) {
+  await deleteRelation(app, from, to, fromKind);
+  await writeRelation(app, { from, to, kind: toKind });
+}
 
 // src/graph/grouping.ts
 var GROUPING_LABELS = {
@@ -1907,6 +1939,7 @@ var CanvasGestures = class {
 // src/views/FlowCanvas.ts
 var SVG_NS = "http://www.w3.org/2000/svg";
 var FIT_PADDING = 32;
+var EDGE_HIT_TOLERANCE = 8;
 function svgEl(tag, attributes = {}) {
   const element = document.createElementNS(SVG_NS, tag);
   for (const [name, value] of Object.entries(attributes)) {
@@ -1994,7 +2027,7 @@ var FlowCanvas = class {
       onDoubleClick: (point) => this.onDoubleClick(point),
       nodeAt: (point) => this.mode === "force" || this.connecting ? this.hitTest(point) : null,
       onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
-      onContextMenu: (point, client) => this.handlers.onMenu(this.hitTest(point), client)
+      onContextMenu: (point, client) => this.onContextMenu(point, client)
     });
     this.observer = new ResizeObserver(() => {
       this.gestures.invalidateBounds();
@@ -2128,8 +2161,8 @@ var FlowCanvas = class {
       this.hitAreas.push({ path: node.path, x, y, width: node.width, height: node.height });
     }
     for (const edge of this.edgeElements) {
-      const from = simulation.get(edge.from);
-      const to = simulation.get(edge.to);
+      const from = simulation.get(edge.relation.from);
+      const to = simulation.get(edge.relation.to);
       if (!from || !to)
         continue;
       edge.element.setAttribute(
@@ -2223,6 +2256,43 @@ var FlowCanvas = class {
     }
     return null;
   }
+  distanceToPath(path, point) {
+    const length = path.getTotalLength();
+    if (length === 0)
+      return Infinity;
+    const samples = Math.min(40, Math.max(8, Math.round(length / 12)));
+    let minDistance = Infinity;
+    for (let index = 0; index <= samples; index++) {
+      const sample = path.getPointAtLength(length * index / samples);
+      minDistance = Math.min(minDistance, Math.hypot(sample.x - point.x, sample.y - point.y));
+    }
+    return minDistance;
+  }
+  hitTestEdge(point) {
+    var _a;
+    const tolerance = EDGE_HIT_TOLERANCE / this.gestures.transform.k;
+    let closest = null;
+    for (const edge of this.edgeElements) {
+      const distance2 = this.distanceToPath(edge.element, point);
+      if (distance2 <= tolerance && (!closest || distance2 < closest.distance)) {
+        closest = { relation: edge.relation, distance: distance2 };
+      }
+    }
+    return (_a = closest == null ? void 0 : closest.relation) != null ? _a : null;
+  }
+  onContextMenu(point, client) {
+    const nodePath = this.hitTest(point);
+    if (nodePath) {
+      this.handlers.onMenu(nodePath, client);
+      return;
+    }
+    const edge = this.hitTestEdge(point);
+    if (edge) {
+      this.handlers.onEdgeMenu(edge, client);
+      return;
+    }
+    this.handlers.onMenu(null, client);
+  }
   onTap(point, event) {
     const path = this.hitTest(point);
     if (path)
@@ -2302,7 +2372,7 @@ var FlowCanvas = class {
     if (!isUndirected(edge)) {
       path.setAttribute("marker-end", `url(#spm-arrow-${kind})`);
     }
-    this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
+    this.edgeElements.push({ element: path, relation: edge.relation });
     return path;
   }
   renderNode(node, previous) {
@@ -2389,7 +2459,7 @@ var FlowCanvas = class {
       element.toggleClass("is-focus", nodePath === path);
     }
     for (const edge of this.edgeElements) {
-      const active = edge.from === path || edge.to === path;
+      const active = edge.relation.from === path || edge.relation.to === path;
       edge.element.toggleClass("is-faded", !active);
       edge.element.toggleClass("is-active", active);
     }
@@ -2424,6 +2494,9 @@ var MODE_LABELS = {
   flow: "Flow layout",
   force: "Force graph"
 };
+function shortTitle(title) {
+  return title.length > 32 ? `${title.slice(0, 31)}\u2026` : title;
+}
 var FlowView = class extends import_obsidian8.ItemView {
   constructor(leaf, settings) {
     super(leaf);
@@ -2461,7 +2534,8 @@ var FlowView = class extends import_obsidian8.ItemView {
     this.canvas = new FlowCanvas(this.canvasEl, {
       onOpenTask: (path, event) => this.openTask(path, event),
       onConnect: (from, to, client) => this.offerRelation(from, to, client),
-      onMenu: (path, client) => this.showMenu(path, client)
+      onMenu: (path, client) => this.showMenu(path, client),
+      onEdgeMenu: (relation, client) => this.showEdgeMenu(relation, client)
     });
     const refresh = (0, import_obsidian8.debounce)(() => this.render(false), 400, true);
     this.registerEvent(
@@ -2771,10 +2845,9 @@ var FlowView = class extends import_obsidian8.ItemView {
     const to = this.graph.nodes.find((record) => record.path === toPath);
     if (!from || !to)
       return;
-    const short = (title) => title.length > 32 ? `${title.slice(0, 31)}\u2026` : title;
     const choices = [
-      { label: `\u201C${short(from.title)}\u201D blocks \u201C${short(to.title)}\u201D`, kind: "dependency" },
-      { label: `\u201C${short(to.title)}\u201D continues \u201C${short(from.title)}\u201D`, kind: "continuation" },
+      { label: `\u201C${shortTitle(from.title)}\u201D blocks \u201C${shortTitle(to.title)}\u201D`, kind: "dependency" },
+      { label: `\u201C${shortTitle(to.title)}\u201D continues \u201C${shortTitle(from.title)}\u201D`, kind: "continuation" },
       { label: "Related", kind: "related" }
     ];
     const menu = new import_obsidian8.Menu();
@@ -2795,6 +2868,61 @@ var FlowView = class extends import_obsidian8.ItemView {
         });
       });
     }
+    menu.showAtPosition(client);
+  }
+  showEdgeMenu(relation, client) {
+    const menu = new import_obsidian8.Menu();
+    if (relation.kind === "mention") {
+      menu.addItem(
+        (item) => item.setTitle("Mentions come from links in the note body \u2014 edit the text to change them").setIcon("info").setDisabled(true)
+      );
+      menu.showAtPosition(client);
+      return;
+    }
+    const from = this.graph.nodes.find((record) => record.path === relation.from);
+    const to = this.graph.nodes.find((record) => record.path === relation.to);
+    if (!from || !to)
+      return;
+    const graphWithoutEdge = {
+      ...this.graph,
+      relations: this.graph.relations.filter((entry) => entry !== relation)
+    };
+    const choices = [
+      { label: `\u201C${shortTitle(from.title)}\u201D blocks \u201C${shortTitle(to.title)}\u201D`, kind: "dependency" },
+      { label: `\u201C${shortTitle(to.title)}\u201D continues \u201C${shortTitle(from.title)}\u201D`, kind: "continuation" },
+      { label: "Related", kind: "related" }
+    ];
+    for (const choice of choices) {
+      if (choice.kind === relation.kind)
+        continue;
+      const draft = { from, to, kind: choice.kind };
+      const rejection = rejectionReason(graphWithoutEdge, draft);
+      menu.addItem((item) => {
+        item.setTitle(rejection ? `Change to: ${choice.label} \u2014 ${rejection}` : `Change to: ${choice.label}`);
+        item.setDisabled(rejection !== null);
+        item.onClick(async () => {
+          try {
+            await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
+            new import_obsidian8.Notice("Relation updated.");
+          } catch (error) {
+            console.error("[Simpromana] Relation update error:", error);
+            new import_obsidian8.Notice("\u274C Could not update the relation.");
+          }
+        });
+      });
+    }
+    menu.addSeparator();
+    menu.addItem(
+      (item) => item.setTitle("Delete relation").setIcon("trash").setWarning(true).onClick(async () => {
+        try {
+          await deleteRelation(this.app, from, to, relation.kind);
+          new import_obsidian8.Notice("Relation deleted.");
+        } catch (error) {
+          console.error("[Simpromana] Relation delete error:", error);
+          new import_obsidian8.Notice("\u274C Could not delete the relation.");
+        }
+      })
+    );
     menu.showAtPosition(client);
   }
   openTask(path, event) {

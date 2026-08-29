@@ -10,7 +10,7 @@ import {
 	setIcon,
 } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
-import type { NoteGraph, NoteRecord, RelationKind } from "../graph/model";
+import type { NoteGraph, NoteRecord, NoteRelation, RelationKind } from "../graph/model";
 import {
 	buildNoteGraph,
 	collapseHubs,
@@ -19,7 +19,7 @@ import {
 	selectSubgraph,
 } from "../graph/build";
 import { rejectionReason } from "../graph/validate";
-import { writeRelation } from "../lib/relations";
+import { changeRelationKind, deleteRelation, writeRelation } from "../lib/relations";
 import { DEFAULT_LAYOUT_OPTIONS, layoutGraph } from "../graph/layout";
 import { GROUPING_LABELS } from "../graph/grouping";
 import type { GroupingMode } from "../graph/grouping";
@@ -61,6 +61,10 @@ const MODE_LABELS: Record<CanvasMode, string> = {
 	flow: "Flow layout",
 	force: "Force graph",
 };
+
+function shortTitle(title: string): string {
+	return title.length > 32 ? `${title.slice(0, 31)}…` : title;
+}
 
 export class FlowView extends ItemView {
 	private projectPath: string | null = null;
@@ -115,6 +119,7 @@ export class FlowView extends ItemView {
 			onOpenTask: (path, event) => this.openTask(path, event),
 			onConnect: (from, to, client) => this.offerRelation(from, to, client),
 			onMenu: (path, client) => this.showMenu(path, client),
+			onEdgeMenu: (relation, client) => this.showEdgeMenu(relation, client),
 		});
 
 		const refresh = debounce(() => this.render(false), 400, true);
@@ -454,10 +459,9 @@ export class FlowView extends ItemView {
 		const to = this.graph.nodes.find((record) => record.path === toPath);
 		if (!from || !to) return;
 
-		const short = (title: string) => (title.length > 32 ? `${title.slice(0, 31)}…` : title);
 		const choices: { label: string; kind: RelationKind }[] = [
-			{ label: `“${short(from.title)}” blocks “${short(to.title)}”`, kind: "dependency" },
-			{ label: `“${short(to.title)}” continues “${short(from.title)}”`, kind: "continuation" },
+			{ label: `“${shortTitle(from.title)}” blocks “${shortTitle(to.title)}”`, kind: "dependency" },
+			{ label: `“${shortTitle(to.title)}” continues “${shortTitle(from.title)}”`, kind: "continuation" },
 			{ label: "Related", kind: "related" },
 		];
 
@@ -479,6 +483,74 @@ export class FlowView extends ItemView {
 				});
 			});
 		}
+		menu.showAtPosition(client);
+	}
+
+	private showEdgeMenu(relation: NoteRelation, client: { x: number; y: number }): void {
+		const menu = new Menu();
+
+		if (relation.kind === "mention") {
+			menu.addItem((item) =>
+				item
+					.setTitle("Mentions come from links in the note body — edit the text to change them")
+					.setIcon("info")
+					.setDisabled(true)
+			);
+			menu.showAtPosition(client);
+			return;
+		}
+
+		const from = this.graph.nodes.find((record) => record.path === relation.from);
+		const to = this.graph.nodes.find((record) => record.path === relation.to);
+		if (!from || !to) return;
+
+		const graphWithoutEdge: NoteGraph = {
+			...this.graph,
+			relations: this.graph.relations.filter((entry) => entry !== relation),
+		};
+
+		const choices: { label: string; kind: RelationKind }[] = [
+			{ label: `“${shortTitle(from.title)}” blocks “${shortTitle(to.title)}”`, kind: "dependency" },
+			{ label: `“${shortTitle(to.title)}” continues “${shortTitle(from.title)}”`, kind: "continuation" },
+			{ label: "Related", kind: "related" },
+		];
+
+		for (const choice of choices) {
+			if (choice.kind === relation.kind) continue;
+			const draft = { from, to, kind: choice.kind };
+			const rejection = rejectionReason(graphWithoutEdge, draft);
+			menu.addItem((item) => {
+				item.setTitle(rejection ? `Change to: ${choice.label} — ${rejection}` : `Change to: ${choice.label}`);
+				item.setDisabled(rejection !== null);
+				item.onClick(async () => {
+					try {
+						await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
+						new Notice("Relation updated.");
+					} catch (error) {
+						console.error("[Simpromana] Relation update error:", error);
+						new Notice("❌ Could not update the relation.");
+					}
+				});
+			});
+		}
+
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle("Delete relation")
+				.setIcon("trash")
+				.setWarning(true)
+				.onClick(async () => {
+					try {
+						await deleteRelation(this.app, from, to, relation.kind);
+						new Notice("Relation deleted.");
+					} catch (error) {
+						console.error("[Simpromana] Relation delete error:", error);
+						new Notice("❌ Could not delete the relation.");
+					}
+				})
+		);
+
 		menu.showAtPosition(client);
 	}
 
