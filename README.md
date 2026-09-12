@@ -4,6 +4,31 @@ Obsidian plugin for project and task management: a task flow graph, a
 kanban board, a project side panel, and helpers to keep `Projects`,
 `Tasks`, and `Reference` notes wired together through frontmatter.
 
+## Installation
+
+Simpromana isn't in Obsidian's community plugin list, so install it with
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) or manually.
+
+**BRAT (recommended)**
+
+1. Install the BRAT community plugin.
+2. In BRAT, *Add beta plugin*, and enter `christt105/obsidian-simpromana-plugin`.
+3. Enable Simpromana under Settings → Community plugins.
+
+**Manual**
+
+1. Download `main.js`, `manifest.json`, and `styles.css` from the
+   [latest release](https://github.com/christt105/obsidian-simpromana-plugin/releases/latest).
+2. Copy them into `<vault>/.obsidian/plugins/simpromana/`.
+3. Enable Simpromana under Settings → Community plugins.
+
+**Why isn't it in the official list?** Simpromana isn't a general-purpose
+task manager: its frontmatter fields, status vocabulary, and folder
+conventions are opinionated, built around how I personally organize my
+own vault rather than abstracted for a wide audience (see *Known
+limitations*). If it picks up enough interest, submitting it to the
+community plugin list is on the table.
+
 ## Requirements
 
 - Obsidian 1.4.0+.
