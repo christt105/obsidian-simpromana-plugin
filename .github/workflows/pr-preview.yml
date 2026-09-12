@@ -1,0 +1,113 @@
+name: BRAT preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  preview:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Build preview version
+        id: version
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          RUN: ${{ github.run_number }}
+        run: |
+          base=$(node -p "const v=require('./manifest.json').version.split('.'); v[0]+'.'+(Number(v[1])+1)+'.0'")
+          version="$base-beta.$RUN.pr$PR"
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            manifest.version = process.argv[1];
+            fs.writeFileSync('manifest.json', JSON.stringify(manifest, null, '\t') + '\n');
+          " "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Replace previous preview release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          for tag in $(gh release list --limit 100 --json tagName --jq ".[].tagName | select(endswith(\".pr$PR\"))"); do
+            gh release delete "$tag" --cleanup-tag --yes
+          done
+
+      - name: Publish preview release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh release create "$VERSION" \
+            main.js manifest.json styles.css \
+            --target "${{ github.event.pull_request.head.sha }}" \
+            --title "$VERSION" \
+            --prerelease \
+            --notes "Preview build of pull request #$PR.
+
+          Install with BRAT: add \`${{ github.repository }}\` and either enable pre-releases, or pin the version \`$VERSION\`.
+          This release is replaced on every push to the pull request."
+
+      - name: Comment install instructions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          body=$(cat <<EOF
+          <!-- brat-preview -->
+          ### Test this PR with BRAT
+
+          Latest preview build: [\`$VERSION\`](https://github.com/${{ github.repository }}/releases/tag/$VERSION)
+
+          1. In BRAT, *Add beta plugin with frozen version*.
+          2. Repository: \`${{ github.repository }}\`
+          3. Version: \`$VERSION\`
+
+          Already added? *Check for updates* picks up new builds if pre-releases are enabled for this plugin; with a frozen version, re-add it with the tag above. Every push to this pull request replaces the preview release.
+          EOF
+          )
+          existing=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq 'map(select(.body | contains("<!-- brat-preview -->"))) | first | .id // empty')
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" -f body="$body" >/dev/null
+          else
+            gh pr comment "$PR" --body "$body"
+          fi
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete preview releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          for tag in $(gh release list --limit 100 --json tagName --jq ".[].tagName | select(endswith(\".pr$PR\"))"); do
+            gh release delete "$tag" --cleanup-tag --yes
+          done
