@@ -46,6 +46,7 @@ export class CanvasGestures {
 	private pointers = new Map<number, Point>();
 	private mode: "none" | "pan" | "pinch" | "node" = "none";
 	private draggedNode: string | null = null;
+	private lastDragPoint: Point | null = null;
 	private pinchDistance = 0;
 	private pinchCentre: Point = { x: 0, y: 0 };
 	private velocity: Point = { x: 0, y: 0 };
@@ -236,6 +237,7 @@ export class CanvasGestures {
 			this.lastMove = this.tapStart;
 			this.velocity = { x: 0, y: 0 };
 			if (this.draggedNode) {
+				this.lastDragPoint = graphPoint;
 				this.handlers.onNodeDrag(this.draggedNode, graphPoint, "start");
 			} else {
 				this.handlers.onGesture(true);
@@ -243,7 +245,7 @@ export class CanvasGestures {
 			if (event.pointerType !== "mouse") this.armLongPress(this.local(event));
 		} else if (this.pointers.size === 2) {
 			this.cancelLongPress();
-			this.endNodeDrag();
+			this.endNodeDrag(this.lastDragPoint ?? undefined);
 			const [a, b] = [...this.pointers.values()];
 			this.mode = "pinch";
 			this.pinchDistance = distance(a, b);
@@ -254,8 +256,9 @@ export class CanvasGestures {
 
 	private endNodeDrag(point?: Point): void {
 		if (!this.draggedNode) return;
-		this.handlers.onNodeDrag(this.draggedNode, point ?? { x: 0, y: 0 }, "end");
+		this.handlers.onNodeDrag(this.draggedNode, point ?? this.lastDragPoint ?? { x: 0, y: 0 }, "end");
 		this.draggedNode = null;
+		this.lastDragPoint = null;
 	}
 
 	private onPointerMove = (event: PointerEvent): void => {
@@ -274,7 +277,8 @@ export class CanvasGestures {
 		if (this.mode === "node" && this.draggedNode) {
 			this.moved += Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
 			if (this.moved > TAP_MOVEMENT) this.cancelLongPress();
-			this.handlers.onNodeDrag(this.draggedNode, this.toGraph(point), "move");
+			this.lastDragPoint = this.toGraph(point);
+			this.handlers.onNodeDrag(this.draggedNode, this.lastDragPoint, "move");
 			return;
 		}
 

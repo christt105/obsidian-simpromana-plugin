@@ -4,20 +4,29 @@ interface RelationKey {
 	kind: RelationKind;
 	/** The declared target comes before the declaring task. */
 	inverted: boolean;
+	/** How this alias is actually spelled when written to frontmatter. */
+	literal: string;
 }
 
-const RELATION_KEYS: Record<string, RelationKey> = {
-	blocks: { kind: "dependency", inverted: false },
-	blocking: { kind: "dependency", inverted: false },
-	blockedby: { kind: "dependency", inverted: true },
-	dependson: { kind: "dependency", inverted: true },
-	continuedby: { kind: "continuation", inverted: false },
-	followedby: { kind: "continuation", inverted: false },
-	continues: { kind: "continuation", inverted: true },
-	follows: { kind: "continuation", inverted: true },
-	related: { kind: "related", inverted: false },
-	relatedto: { kind: "related", inverted: false },
-};
+const RELATION_KEY_LIST: RelationKey[] = [
+	{ kind: "dependency", inverted: false, literal: "blocks" },
+	{ kind: "dependency", inverted: false, literal: "blocking" },
+	{ kind: "dependency", inverted: true, literal: "blocked_by" },
+	{ kind: "dependency", inverted: true, literal: "depends_on" },
+	{ kind: "continuation", inverted: false, literal: "continued_by" },
+	{ kind: "continuation", inverted: false, literal: "followed_by" },
+	{ kind: "continuation", inverted: true, literal: "continues" },
+	{ kind: "continuation", inverted: true, literal: "follows" },
+	{ kind: "related", inverted: false, literal: "related" },
+	{ kind: "related", inverted: false, literal: "related_to" },
+];
+
+const RELATION_KEYS: Record<string, RelationKey> = Object.fromEntries(
+	RELATION_KEY_LIST.map((entry) => [normalizeKey(entry.literal), entry])
+);
+
+/** Frontmatter keys the plugin renders as a task searcher instead of plain text. */
+export const RELATION_PROPERTY_KEYS = RELATION_KEY_LIST.map((entry) => entry.literal);
 
 export const CANONICAL_RELATION_KEYS: Record<RelationKind, string> = {
 	dependency: "blocked_by",

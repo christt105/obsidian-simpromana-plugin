@@ -357,7 +357,7 @@ function sideTowards(node: LayoutNode, towards: Point): Side {
 	const centre = centreOf(node);
 	const dx = towards.x - centre.x;
 	const dy = towards.y - centre.y;
-	if (Math.abs(dx) >= node.width) return dx >= 0 ? "right" : "left";
+	if (Math.abs(dx) >= node.width / 2) return dx >= 0 ? "right" : "left";
 	return dy >= 0 ? "bottom" : "top";
 }
 

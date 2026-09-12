@@ -159,7 +159,7 @@ export class CreateTaskModal extends Modal {
 			: "";
 
 		const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
-		const dueDateLine = this.dueDate.trim() ? `due_date: ${this.dueDate.trim()}` : "";
+		const dueDateLine = this.dueDate.trim() ? `due_date: "${this.dueDate.trim()}"` : "";
 
 		const frontmatterLines = [
 			`tstatus: ${this.tstatus}`,

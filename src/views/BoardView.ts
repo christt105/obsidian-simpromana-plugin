@@ -2,7 +2,7 @@ import { ItemView, Keymap, Notice, TFile, ViewStateResult, WorkspaceLeaf, deboun
 import type { SimpromanaSettings } from "../settings";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes, projectFiles } from "../lib/notes";
-import { toTargetList } from "../graph/relations";
+import { relationKeyOf, toTargetList } from "../graph/relations";
 import { projectsPath, tasksPath } from "../lib/vault";
 
 export const BOARD_VIEW_TYPE = "simpromana-board";
@@ -16,6 +16,7 @@ export interface BoardViewState extends Record<string, unknown> {
 
 export class BoardView extends ItemView {
 	private records: NoteRecord[] = [];
+	private blockersByPath = new Map<string, { path: string; title: string }[]>();
 	private projectPath: string | null = null;
 	private projectSelect: HTMLSelectElement;
 	private columnsEl: HTMLElement;
@@ -115,8 +116,48 @@ export class BoardView extends ItemView {
 
 	private refresh(): void {
 		this.records = collectNotes(this.app, this.settings, { references: false });
+		this.computeBlockers();
 		this.syncProjectSelect();
 		this.renderBoard();
+	}
+
+	private computeBlockers(): void {
+		const byPath = new Map(this.records.map((record) => [record.path, record] as const));
+		const map = new Map<string, Map<string, { path: string; title: string }>>();
+
+		const addBlocker = (blockedPath: string, blockerPath: string) => {
+			if (blockedPath === blockerPath) return;
+			let entry = map.get(blockedPath);
+			if (!entry) {
+				entry = new Map();
+				map.set(blockedPath, entry);
+			}
+			if (!entry.has(blockerPath)) {
+				const title = byPath.get(blockerPath)?.title ?? blockerPath;
+				entry.set(blockerPath, { path: blockerPath, title });
+			}
+		};
+
+		for (const record of this.records) {
+			for (const [key, value] of Object.entries(record.frontmatter)) {
+				const relationKey = relationKeyOf(key);
+				if (!relationKey || relationKey.kind !== "dependency") continue;
+
+				for (const target of toTargetList(value)) {
+					const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
+					if (!(file instanceof TFile)) continue;
+					if (relationKey.inverted) {
+						addBlocker(record.path, file.path);
+					} else {
+						addBlocker(file.path, record.path);
+					}
+				}
+			}
+		}
+
+		this.blockersByPath = new Map(
+			[...map.entries()].map(([path, blockers]) => [path, [...blockers.values()]])
+		);
 	}
 
 	private renderBoard(): void {
@@ -217,15 +258,7 @@ export class BoardView extends ItemView {
 	}
 
 	private blockedBy(record: NoteRecord): { path: string; title: string }[] {
-		const targets = toTargetList(record.frontmatter.blocked_by);
-		const dependencies: { path: string; title: string }[] = [];
-		for (const target of targets) {
-			const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
-			if (!(file instanceof TFile)) continue;
-			const match = this.records.find((entry) => entry.path === file.path);
-			dependencies.push({ path: file.path, title: match?.title ?? file.basename });
-		}
-		return dependencies;
+		return this.blockersByPath.get(record.path) ?? [];
 	}
 
 	private renderBlockedBadge(card: HTMLElement, blockers: { path: string; title: string }[]): void {

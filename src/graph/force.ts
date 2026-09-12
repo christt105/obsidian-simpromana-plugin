@@ -170,9 +170,10 @@ export class ForceSimulation {
 				let dy = b.y - a.y;
 				let squared = dx * dx + dy * dy;
 				if (squared < 1) {
-					dx = (i % 7) - 3;
-					dy = (j % 7) - 3;
-					squared = Math.max(1, dx * dx + dy * dy);
+					const angle = (i * 12.9898 + j * 78.233) % (Math.PI * 2);
+					dx = Math.cos(angle);
+					dy = Math.sin(angle);
+					squared = dx * dx + dy * dy;
 				}
 				const distance = Math.sqrt(squared);
 				const magnitude = charge / Math.max(squared, 400);
