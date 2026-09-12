@@ -2,6 +2,7 @@ import { ConfirmationModal, Notice, Plugin, TFile, WorkspaceLeaf, normalizePath 
 import { DEFAULT_SETTINGS, SimpromanaSettingTab, SimpromanaSettings } from "./settings";
 import { CreateProjectModal } from "./modals/CreateProjectModal";
 import { CreateTaskModal } from "./modals/CreateTaskModal";
+import { CreateReferenceModal } from "./modals/CreateReferenceModal";
 import { setupBases } from "./lib/bases";
 import { activeProjectFile, archivePath, ensureFolder } from "./lib/vault";
 import { registerRelationPropertyWidget } from "./lib/relationPropertyWidget";
@@ -57,6 +58,12 @@ export default class SimpromanaPlugin extends Plugin {
 			id: "create-task",
 			name: "New task",
 			callback: () => new CreateTaskModal(this.app, this.settings).open(),
+		});
+
+		this.addCommand({
+			id: "create-reference",
+			name: "New reference",
+			callback: () => new CreateReferenceModal(this.app, this.settings).open(),
 		});
 
 		this.addCommand({
