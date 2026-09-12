@@ -1,7 +1,7 @@
 {
 	"id": "simpromana",
 	"name": "Simpromana",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"minAppVersion": "1.4.0",
 	"description": "Project and task management: native commands, kanban board and project panel.",
 	"author": "christt105",
