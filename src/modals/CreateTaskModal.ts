@@ -29,11 +29,13 @@ export class CreateTaskModal extends Modal {
 	private tstatus = "Todo";
 	private priority = "medium";
 	private milestone = "";
+	private epic = "";
+	private dueDate = "";
 	private selectedProject: TFile | null = null;
 	private projects: TFile[] = [];
 	private lockedProject = false;
 
-	constructor(app: App, private settings: SimpromanaSettings) {
+	constructor(app: App, private settings: SimpromanaSettings, private presetProject: TFile | null = null) {
 		super(app);
 	}
 
@@ -43,7 +45,7 @@ export class CreateTaskModal extends Modal {
 		contentEl.createEl("h2", { text: "New task" });
 
 		this.projects = await getAllProjects(this.app, this.settings);
-		const contextProject = activeProjectFile(this.app, this.settings);
+		const contextProject = this.presetProject ?? activeProjectFile(this.app, this.settings);
 
 		if (contextProject) {
 			this.selectedProject = contextProject;
@@ -103,6 +105,21 @@ export class CreateTaskModal extends Modal {
 				text.setPlaceholder("v1.0").onChange((v) => (this.milestone = v))
 			);
 
+		new Setting(contentEl)
+			.setName("Epic")
+			.setDesc("Optional label to group this task with others in the flow view.")
+			.addText((text) =>
+				text.setPlaceholder("Onboarding rework").onChange((v) => (this.epic = v))
+			);
+
+		new Setting(contentEl)
+			.setName("Due date")
+			.setDesc("Optional.")
+			.addText((text) => {
+				text.inputEl.type = "date";
+				text.onChange((v) => (this.dueDate = v));
+			});
+
 		new Setting(contentEl).addButton((btn) =>
 			btn
 				.setButtonText("Create")
@@ -141,11 +158,16 @@ export class CreateTaskModal extends Modal {
 			? `milestone: "${this.milestone.trim()}"`
 			: "";
 
+		const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
+		const dueDateLine = this.dueDate.trim() ? `due_date: "${this.dueDate.trim()}"` : "";
+
 		const frontmatterLines = [
 			`tstatus: ${this.tstatus}`,
 			"type: task",
 			`priority: ${this.priority}`,
 			milestoneLine,
+			epicLine,
+			dueDateLine,
 			projectLine,
 		].filter(Boolean);
 

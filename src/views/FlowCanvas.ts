@@ -1,13 +1,15 @@
 import { setTooltip } from "obsidian";
-import type { GraphLayout, LayoutEdge, LayoutGroup, LayoutNode } from "../graph/layout";
+import type { GraphLayout, LayoutEdge, LayoutEpic, LayoutGroup, LayoutNode } from "../graph/layout";
+import { EPIC_PADDING } from "../graph/layout";
 import type { NoteRelation } from "../graph/model";
-import { ForceSimulation } from "../graph/force";
-import type { ForceNode } from "../graph/force";
+import { DEFAULT_FORCE_OPTIONS, ForceSimulation } from "../graph/force";
+import type { ForceNode, ForceOptions } from "../graph/force";
 import { CanvasGestures } from "./CanvasGestures";
 import type { DragPhase, Point, Transform } from "./CanvasGestures";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const FIT_PADDING = 32;
+const EDGE_HIT_TOLERANCE = 8;
 
 export type CanvasMode = "flow" | "force";
 
@@ -23,6 +25,7 @@ interface CanvasHandlers {
 	onOpenTask(path: string, event: PointerEvent): void;
 	onConnect(from: string, to: string, client: Point): void;
 	onMenu(path: string | null, client: Point): void;
+	onEdgeMenu(relation: NoteRelation, client: Point): void;
 }
 
 function svgEl<K extends keyof SVGElementTagNameMap>(
@@ -87,12 +90,15 @@ function statusSlug(status: string): string {
 export class FlowCanvas {
 	private svg: SVGSVGElement;
 	private viewport: SVGGElement;
+	private epicLayer: SVGGElement;
 	private edgeLayer: SVGGElement;
 	private nodeLayer: SVGGElement;
 	private gestures: CanvasGestures;
 	private layout: GraphLayout | null = null;
 	private nodeElements = new Map<string, SVGGElement>();
-	private edgeElements: { element: SVGPathElement; from: string; to: string }[] = [];
+	private edgeElements: { element: SVGPathElement; relation: NoteRelation }[] = [];
+	private epicElements = new Map<string, { rect: SVGRectElement; label: SVGTextElement }>();
+	private epicMembers = new Map<string, string[]>();
 	private neighbours = new Map<string, Set<string>>();
 	private hitAreas: HitArea[] = [];
 	private hovered: string | null = null;
@@ -101,19 +107,23 @@ export class FlowCanvas {
 	private mode: CanvasMode = "flow";
 	private simulation: ForceSimulation | null = null;
 	private simulationFrame = 0;
+	private forceOptions: ForceOptions = DEFAULT_FORCE_OPTIONS;
 	private grabOffset: Point = { x: 0, y: 0 };
 	private connecting = false;
 	private connectFrom: string | null = null;
 	private ghost: SVGPathElement | null = null;
 	private dropTarget: string | null = null;
+	private tapConnectFrom: string | null = null;
 
 	constructor(private container: HTMLElement, private handlers: CanvasHandlers) {
 		this.svg = svgEl("svg", { class: "spm-flow-svg" });
 		this.svg.appendChild(this.buildDefs());
 
 		this.viewport = svgEl("g", { class: "spm-flow-viewport" });
+		this.epicLayer = svgEl("g", { class: "spm-flow-epics" });
 		this.edgeLayer = svgEl("g", { class: "spm-flow-edges" });
 		this.nodeLayer = svgEl("g", { class: "spm-flow-nodes" });
+		this.viewport.appendChild(this.epicLayer);
 		this.viewport.appendChild(this.edgeLayer);
 		this.viewport.appendChild(this.nodeLayer);
 		this.svg.appendChild(this.viewport);
@@ -128,7 +138,7 @@ export class FlowCanvas {
 			nodeAt: (point) =>
 				this.mode === "force" || this.connecting ? this.hitTest(point) : null,
 			onNodeDrag: (path, point, phase) => this.onNodeDrag(path, point, phase),
-			onContextMenu: (point, client) => this.handlers.onMenu(this.hitTest(point), client),
+			onContextMenu: (point, client) => this.onContextMenu(point, client),
 		});
 
 		this.observer = new ResizeObserver(() => {
@@ -136,26 +146,44 @@ export class FlowCanvas {
 			if (this.pendingFit) this.fit(false);
 		});
 		this.observer.observe(this.container);
+		document.addEventListener("keydown", this.onKeyDown);
 	}
 
 	destroy(): void {
 		this.stopSimulation();
 		this.observer.disconnect();
 		this.gestures.destroy();
+		document.removeEventListener("keydown", this.onKeyDown);
 		this.svg.remove();
 	}
 
 	render(
 		layout: GraphLayout,
-		options: { fit: boolean; mode: CanvasMode; relations: NoteRelation[] }
+		options: { fit: boolean; mode: CanvasMode; relations: NoteRelation[]; force?: ForceOptions }
 	): void {
 		this.layout = layout;
 		this.mode = options.mode;
+		this.forceOptions = options.force ?? DEFAULT_FORCE_OPTIONS;
 		this.edgeLayer.empty();
 		this.edgeElements = [];
 		this.neighbours.clear();
 		this.hitAreas = [];
 		this.hovered = null;
+		this.tapConnectFrom = null;
+		this.svg.toggleClass("is-connecting", this.connecting);
+
+		this.epicLayer.empty();
+		this.epicElements.clear();
+		this.epicMembers.clear();
+		for (const epic of layout.epics) {
+			this.epicElements.set(epic.label, this.buildEpic(epic));
+		}
+		for (const node of layout.nodes) {
+			if (!node.record.epic) continue;
+			const members = this.epicMembers.get(node.record.epic);
+			if (members) members.push(node.record.path);
+			else this.epicMembers.set(node.record.epic, [node.record.path]);
+		}
 
 		if (this.mode === "flow") {
 			if (layout.unlinkedTop !== null) {
@@ -226,7 +254,7 @@ export class FlowCanvas {
 		}
 
 		const previous = this.simulation;
-		const simulation = new ForceSimulation(layout, relations);
+		const simulation = new ForceSimulation(layout, relations, this.forceOptions);
 		let carriedNodes = 0;
 		for (const node of simulation.nodes) {
 			const carried = previous?.get(node.path);
@@ -277,13 +305,39 @@ export class FlowCanvas {
 		}
 
 		for (const edge of this.edgeElements) {
-			const from = simulation.get(edge.from);
-			const to = simulation.get(edge.to);
+			const from = simulation.get(edge.relation.from);
+			const to = simulation.get(edge.relation.to);
 			if (!from || !to) continue;
 			edge.element.setAttribute(
 				"d",
 				curveBetween(borderPoint(from, to), borderPoint(to, from))
 			);
+		}
+
+		for (const [label, paths] of this.epicMembers) {
+			const elements = this.epicElements.get(label);
+			if (!elements) continue;
+
+			let minX = Infinity;
+			let minY = Infinity;
+			let maxX = -Infinity;
+			let maxY = -Infinity;
+			for (const path of paths) {
+				const node = simulation.get(path);
+				if (!node) continue;
+				minX = Math.min(minX, node.x - node.width / 2);
+				minY = Math.min(minY, node.y - node.height / 2);
+				maxX = Math.max(maxX, node.x + node.width / 2);
+				maxY = Math.max(maxY, node.y + node.height / 2);
+			}
+			if (minX === Infinity) continue;
+
+			elements.rect.setAttribute("x", String(minX - EPIC_PADDING));
+			elements.rect.setAttribute("y", String(minY - EPIC_PADDING));
+			elements.rect.setAttribute("width", String(maxX - minX + EPIC_PADDING * 2));
+			elements.rect.setAttribute("height", String(maxY - minY + EPIC_PADDING * 2));
+			elements.label.setAttribute("x", String(minX - EPIC_PADDING + 10));
+			elements.label.setAttribute("y", String(minY - EPIC_PADDING + 18));
 		}
 	}
 
@@ -291,6 +345,28 @@ export class FlowCanvas {
 		this.connecting = connecting;
 		this.svg.toggleClass("is-connecting", connecting);
 	}
+
+	/** Tap-to-connect entry point for touch: highlights the source, then the next tap picks the target. */
+	beginConnectFrom(path: string): void {
+		this.cancelTapConnect();
+		this.tapConnectFrom = path;
+		this.nodeElements.get(path)?.addClass("is-connect-source");
+		this.svg.addClass("is-connecting");
+	}
+
+	cancelTapConnect(): void {
+		if (!this.tapConnectFrom) return;
+		this.nodeElements.get(this.tapConnectFrom)?.removeClass("is-connect-source");
+		this.tapConnectFrom = null;
+		this.svg.toggleClass("is-connecting", this.connecting);
+	}
+
+	private onKeyDown = (event: KeyboardEvent): void => {
+		if (event.key === "Escape" && this.tapConnectFrom) {
+			event.preventDefault();
+			this.cancelTapConnect();
+		}
+	};
 
 	private nodeCentre(path: string): Point | null {
 		const area = this.hitAreas.find((entry) => entry.path === path);
@@ -385,8 +461,56 @@ export class FlowCanvas {
 		return null;
 	}
 
+	private distanceToPath(path: SVGPathElement, point: Point): number {
+		const length = path.getTotalLength();
+		if (length === 0) return Infinity;
+		const samples = Math.min(40, Math.max(8, Math.round(length / 12)));
+		let minDistance = Infinity;
+		for (let index = 0; index <= samples; index++) {
+			const sample = path.getPointAtLength((length * index) / samples);
+			minDistance = Math.min(minDistance, Math.hypot(sample.x - point.x, sample.y - point.y));
+		}
+		return minDistance;
+	}
+
+	private hitTestEdge(point: Point): NoteRelation | null {
+		const tolerance = EDGE_HIT_TOLERANCE / this.gestures.transform.k;
+		let closest: { relation: NoteRelation; distance: number } | null = null;
+		for (const edge of this.edgeElements) {
+			const distance = this.distanceToPath(edge.element, point);
+			if (distance <= tolerance && (!closest || distance < closest.distance)) {
+				closest = { relation: edge.relation, distance };
+			}
+		}
+		return closest?.relation ?? null;
+	}
+
+	private onContextMenu(point: Point, client: Point): void {
+		const nodePath = this.hitTest(point);
+		if (nodePath) {
+			this.handlers.onMenu(nodePath, client);
+			return;
+		}
+		const edge = this.hitTestEdge(point);
+		if (edge) {
+			this.handlers.onEdgeMenu(edge, client);
+			return;
+		}
+		this.handlers.onMenu(null, client);
+	}
+
 	private onTap(point: Point, event: PointerEvent): void {
 		const path = this.hitTest(point);
+
+		if (this.tapConnectFrom) {
+			const source = this.tapConnectFrom;
+			this.cancelTapConnect();
+			if (path && path !== source) {
+				this.handlers.onConnect(source, path, this.gestures.toClient(point));
+			}
+			return;
+		}
+
 		if (path) this.handlers.onOpenTask(path, event);
 	}
 
@@ -456,6 +580,23 @@ export class FlowCanvas {
 		return element;
 	}
 
+	private buildEpic(epic: LayoutEpic): { rect: SVGRectElement; label: SVGTextElement } {
+		const group = svgEl("g", { class: "spm-flow-epic" });
+		const rect = svgEl("rect", {
+			x: String(epic.x),
+			y: String(epic.y),
+			width: String(epic.width),
+			height: String(epic.height),
+			rx: "12",
+		});
+		const label = svgEl("text", { x: String(epic.x + 10), y: String(epic.y + 18) });
+		label.textContent = epic.label;
+		group.appendChild(rect);
+		group.appendChild(label);
+		this.epicLayer.appendChild(group);
+		return { rect, label };
+	}
+
 	private buildEdge(edge: LayoutEdge): SVGPathElement {
 		const kind = edge.cyclic ? "cycle" : edge.relation.kind;
 		const path = svgEl("path", {
@@ -465,7 +606,7 @@ export class FlowCanvas {
 		if (!isUndirected(edge)) {
 			path.setAttribute("marker-end", `url(#spm-arrow-${kind})`);
 		}
-		this.edgeElements.push({ element: path, from: edge.relation.from, to: edge.relation.to });
+		this.edgeElements.push({ element: path, relation: edge.relation });
 		return path;
 	}
 
@@ -554,7 +695,7 @@ export class FlowCanvas {
 			element.toggleClass("is-focus", nodePath === path);
 		}
 		for (const edge of this.edgeElements) {
-			const active = edge.from === path || edge.to === path;
+			const active = edge.relation.from === path || edge.relation.to === path;
 			edge.element.toggleClass("is-faded", !active);
 			edge.element.toggleClass("is-active", active);
 		}

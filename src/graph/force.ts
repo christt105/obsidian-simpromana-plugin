@@ -29,7 +29,15 @@ export interface ForceOptions {
 	alphaMin: number;
 	padding: number;
 	maxVelocity: number;
+	linkDistance: Record<RelationKind, number>;
 }
+
+export const DEFAULT_LINK_DISTANCE: Record<RelationKind, number> = {
+	dependency: 280,
+	continuation: 260,
+	related: 320,
+	mention: 360,
+};
 
 export const DEFAULT_FORCE_OPTIONS: ForceOptions = {
 	charge: -1400,
@@ -41,16 +49,10 @@ export const DEFAULT_FORCE_OPTIONS: ForceOptions = {
 	alphaMin: 0.008,
 	padding: 26,
 	maxVelocity: 60,
+	linkDistance: DEFAULT_LINK_DISTANCE,
 };
 
 const COLLISION_PASSES = 4;
-
-const LINK_DISTANCE: Record<RelationKind, number> = {
-	dependency: 280,
-	continuation: 260,
-	related: 320,
-	mention: 360,
-};
 
 export class ForceSimulation {
 	readonly nodes: ForceNode[] = [];
@@ -84,7 +86,7 @@ export class ForceSimulation {
 			const source = this.index.get(relation.from);
 			const target = this.index.get(relation.to);
 			if (!source || !target) continue;
-			this.links.push({ source, target, distance: LINK_DISTANCE[relation.kind] });
+			this.links.push({ source, target, distance: this.options.linkDistance[relation.kind] });
 		}
 
 		if (this.nodes.length > 0) {
@@ -168,9 +170,10 @@ export class ForceSimulation {
 				let dy = b.y - a.y;
 				let squared = dx * dx + dy * dy;
 				if (squared < 1) {
-					dx = (i % 7) - 3;
-					dy = (j % 7) - 3;
-					squared = Math.max(1, dx * dx + dy * dy);
+					const angle = (i * 12.9898 + j * 78.233) % (Math.PI * 2);
+					dx = Math.cos(angle);
+					dy = Math.sin(angle);
+					squared = dx * dx + dy * dy;
 				}
 				const distance = Math.sqrt(squared);
 				const magnitude = charge / Math.max(squared, 400);

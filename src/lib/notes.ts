@@ -40,6 +40,7 @@ function readNote(app: App, file: TFile, kind: NoteKind): NoteRecord {
 		status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
 		priority: stringValue(frontmatter.priority),
 		milestone: stringValue(frontmatter.milestone) || null,
+		epic: stringValue(frontmatter.epic) || null,
 		frontmatter,
 		links: (cache?.links ?? []).map((link) => link.link),
 	};

@@ -147,6 +147,16 @@ export function collapseHubs(
 	return { graph: { ...graph, relations }, hidden };
 }
 
+export function filterRelationKinds(
+	graph: Subgraph,
+	drawKinds: Record<RelationKind, boolean>
+): Subgraph {
+	return {
+		...graph,
+		relations: graph.relations.filter((relation) => drawKinds[relation.kind]),
+	};
+}
+
 export function connectedPaths(graph: NoteGraph): Set<string> {
 	const connected = new Set<string>();
 	for (const relation of graph.relations) {
