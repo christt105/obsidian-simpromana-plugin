@@ -81,18 +81,22 @@ var import_obsidian3 = require("obsidian");
 var import_obsidian2 = require("obsidian");
 
 // src/graph/relations.ts
-var RELATION_KEYS = {
-  blocks: { kind: "dependency", inverted: false },
-  blocking: { kind: "dependency", inverted: false },
-  blockedby: { kind: "dependency", inverted: true },
-  dependson: { kind: "dependency", inverted: true },
-  continuedby: { kind: "continuation", inverted: false },
-  followedby: { kind: "continuation", inverted: false },
-  continues: { kind: "continuation", inverted: true },
-  follows: { kind: "continuation", inverted: true },
-  related: { kind: "related", inverted: false },
-  relatedto: { kind: "related", inverted: false }
-};
+var RELATION_KEY_LIST = [
+  { kind: "dependency", inverted: false, literal: "blocks" },
+  { kind: "dependency", inverted: false, literal: "blocking" },
+  { kind: "dependency", inverted: true, literal: "blocked_by" },
+  { kind: "dependency", inverted: true, literal: "depends_on" },
+  { kind: "continuation", inverted: false, literal: "continued_by" },
+  { kind: "continuation", inverted: false, literal: "followed_by" },
+  { kind: "continuation", inverted: true, literal: "continues" },
+  { kind: "continuation", inverted: true, literal: "follows" },
+  { kind: "related", inverted: false, literal: "related" },
+  { kind: "related", inverted: false, literal: "related_to" }
+];
+var RELATION_KEYS = Object.fromEntries(
+  RELATION_KEY_LIST.map((entry) => [normalizeKey(entry.literal), entry])
+);
+var RELATION_PROPERTY_KEYS = RELATION_KEY_LIST.map((entry) => entry.literal);
 var CANONICAL_RELATION_KEYS = {
   dependency: "blocked_by",
   continuation: "continues",
@@ -158,10 +162,8 @@ async function ensureFolder(app, path) {
   }
 }
 async function getAllProjects(app, s) {
-  const folder = app.vault.getAbstractFileByPath(projectsPath(s));
-  if (!(folder instanceof import_obsidian2.TFolder))
-    return [];
-  return folder.children.filter((f) => f instanceof import_obsidian2.TFile && f.extension === "md").sort((a, b) => a.basename.localeCompare(b.basename));
+  const prefix = `${projectsPath(s)}/`;
+  return app.vault.getMarkdownFiles().filter((file) => file.path.startsWith(prefix)).sort((a, b) => a.basename.localeCompare(b.basename));
 }
 function activeProjectFile(app, s) {
   var _a;
@@ -399,7 +401,7 @@ var CreateTaskModal = class extends import_obsidian4.Modal {
     const projectLine = this.selectedProject ? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}` : "project:";
     const milestoneLine = this.milestone.trim() ? `milestone: "${this.milestone.trim()}"` : "";
     const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
-    const dueDateLine = this.dueDate.trim() ? `due_date: ${this.dueDate.trim()}` : "";
+    const dueDateLine = this.dueDate.trim() ? `due_date: "${this.dueDate.trim()}"` : "";
     const frontmatterLines = [
       `tstatus: ${this.tstatus}`,
       "type: task",
@@ -660,12 +662,10 @@ var TaskSearchModal = class extends import_obsidian7.FuzzySuggestModal {
 
 // src/lib/relationPropertyWidget.ts
 var RELATION_WIDGET_TYPE = "simpromana-relation";
-var RELATION_PROPERTY_KEYS = ["blocked_by", "blocks", "continues", "continued_by", "related"];
-function toValueArray(data) {
+function toRawArray(data) {
   if (data === null || data === void 0)
     return [];
-  const values = Array.isArray(data) ? data : [data];
-  return values.filter((value) => typeof value === "string");
+  return Array.isArray(data) ? data : [data];
 }
 function isValidRelationValue(value) {
   if (value === null || value === void 0)
@@ -703,7 +703,9 @@ var RelationPropertyWidgetComponent = class {
     this.context = context;
     this.type = RELATION_WIDGET_TYPE;
     this.addButtonEl = null;
-    this.values = toValueArray(data);
+    const raw = toRawArray(data);
+    this.values = raw.filter((value) => typeof value === "string");
+    this.extras = raw.filter((value) => typeof value !== "string");
     this.draw();
   }
   focus() {
@@ -750,7 +752,7 @@ var RelationPropertyWidgetComponent = class {
     }).open();
   }
   commit() {
-    this.context.onChange([...this.values]);
+    this.context.onChange([...this.values, ...this.extras]);
     this.draw();
   }
 };
@@ -1252,7 +1254,7 @@ function sideTowards(node, towards) {
   const centre = centreOf(node);
   const dx = towards.x - centre.x;
   const dy = towards.y - centre.y;
-  if (Math.abs(dx) >= node.width)
+  if (Math.abs(dx) >= node.width / 2)
     return dx >= 0 ? "right" : "left";
   return dy >= 0 ? "bottom" : "top";
 }
@@ -1694,9 +1696,10 @@ var ForceSimulation = class {
         let dy = b.y - a.y;
         let squared = dx * dx + dy * dy;
         if (squared < 1) {
-          dx = i % 7 - 3;
-          dy = j % 7 - 3;
-          squared = Math.max(1, dx * dx + dy * dy);
+          const angle = (i * 12.9898 + j * 78.233) % (Math.PI * 2);
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          squared = dx * dx + dy * dy;
         }
         const distance2 = Math.sqrt(squared);
         const magnitude = charge / Math.max(squared, 400);
@@ -1855,6 +1858,7 @@ var CanvasGestures = class {
     this.pointers = /* @__PURE__ */ new Map();
     this.mode = "none";
     this.draggedNode = null;
+    this.lastDragPoint = null;
     this.pinchDistance = 0;
     this.pinchCentre = { x: 0, y: 0 };
     this.velocity = { x: 0, y: 0 };
@@ -1868,6 +1872,7 @@ var CanvasGestures = class {
     this.rectTime = 0;
     this.longPress = null;
     this.onPointerDown = (event) => {
+      var _a;
       if (event.button !== 0 && event.button !== 1)
         return;
       this.stopMotion();
@@ -1882,6 +1887,7 @@ var CanvasGestures = class {
         this.lastMove = this.tapStart;
         this.velocity = { x: 0, y: 0 };
         if (this.draggedNode) {
+          this.lastDragPoint = graphPoint;
           this.handlers.onNodeDrag(this.draggedNode, graphPoint, "start");
         } else {
           this.handlers.onGesture(true);
@@ -1890,7 +1896,7 @@ var CanvasGestures = class {
           this.armLongPress(this.local(event));
       } else if (this.pointers.size === 2) {
         this.cancelLongPress();
-        this.endNodeDrag();
+        this.endNodeDrag((_a = this.lastDragPoint) != null ? _a : void 0);
         const [a, b] = [...this.pointers.values()];
         this.mode = "pinch";
         this.pinchDistance = distance(a, b);
@@ -1912,7 +1918,8 @@ var CanvasGestures = class {
         this.moved += Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y);
         if (this.moved > TAP_MOVEMENT)
           this.cancelLongPress();
-        this.handlers.onNodeDrag(this.draggedNode, this.toGraph(point), "move");
+        this.lastDragPoint = this.toGraph(point);
+        this.handlers.onNodeDrag(this.draggedNode, this.lastDragPoint, "move");
         return;
       }
       if (this.mode === "pan") {
@@ -2150,10 +2157,12 @@ var CanvasGestures = class {
     this.inertiaFrame = requestAnimationFrame(step);
   }
   endNodeDrag(point) {
+    var _a;
     if (!this.draggedNode)
       return;
-    this.handlers.onNodeDrag(this.draggedNode, point != null ? point : { x: 0, y: 0 }, "end");
+    this.handlers.onNodeDrag(this.draggedNode, (_a = point != null ? point : this.lastDragPoint) != null ? _a : { x: 0, y: 0 }, "end");
     this.draggedNode = null;
+    this.lastDragPoint = null;
   }
   cancelLongPress() {
     if (this.longPress !== null)
@@ -3191,8 +3200,9 @@ var FlowView = class extends import_obsidian11.ItemView {
       scoped = dropNodes(scoped, (record) => hidden.has(record.path));
     const collapsed = collapseHubs(scoped, preferences.hubLimit);
     scoped = collapsed.graph;
+    const showMentionCount = preferences.drawKinds.mention;
     for (const record of scoped.nodes) {
-      record.hiddenMentions = collapsed.hidden.get(record.path);
+      record.hiddenMentions = showMentionCount ? collapsed.hidden.get(record.path) : void 0;
     }
     scoped = filterRelationKinds(scoped, preferences.drawKinds);
     this.graph = scoped;
@@ -3329,6 +3339,7 @@ var FlowView = class extends import_obsidian11.ItemView {
         item.onClick(async () => {
           try {
             await writeRelation(this.app, draft);
+            this.applyLocalRelation({ from: draft.from.path, to: draft.to.path, kind: draft.kind });
             new import_obsidian11.Notice("Relation created.");
           } catch (error) {
             console.error("[Simpromana] Relation write error:", error);
@@ -3372,6 +3383,8 @@ var FlowView = class extends import_obsidian11.ItemView {
         item.onClick(async () => {
           try {
             await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
+            this.removeLocalRelation(relation);
+            this.applyLocalRelation({ from: relation.from, to: relation.to, kind: choice.kind });
             new import_obsidian11.Notice("Relation updated.");
           } catch (error) {
             console.error("[Simpromana] Relation update error:", error);
@@ -3385,6 +3398,7 @@ var FlowView = class extends import_obsidian11.ItemView {
       (item) => item.setTitle("Delete relation").setIcon("trash").setWarning(true).onClick(async () => {
         try {
           await deleteRelation(this.app, from, to, relation.kind);
+          this.removeLocalRelation(relation);
           new import_obsidian11.Notice("Relation deleted.");
         } catch (error) {
           console.error("[Simpromana] Relation delete error:", error);
@@ -3401,6 +3415,17 @@ var FlowView = class extends import_obsidian11.ItemView {
     const leaf = this.app.workspace.getLeaf(import_obsidian11.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
+  /**
+   * Patches the in-memory graph right after a write so immediately-following
+   * relation actions validate against current state instead of the debounced
+   * full refresh, which can lag up to 400ms behind a metadata change.
+   */
+  applyLocalRelation(relation) {
+    this.graph = { ...this.graph, relations: [...this.graph.relations, relation] };
+  }
+  removeLocalRelation(relation) {
+    this.graph = { ...this.graph, relations: this.graph.relations.filter((entry) => entry !== relation) };
+  }
 };
 
 // src/views/BoardView.ts
@@ -3412,6 +3437,7 @@ var BoardView = class extends import_obsidian12.ItemView {
     super(leaf);
     this.settings = settings;
     this.records = [];
+    this.blockersByPath = /* @__PURE__ */ new Map();
     this.projectPath = null;
   }
   getViewType() {
@@ -3495,8 +3521,47 @@ var BoardView = class extends import_obsidian12.ItemView {
   }
   refresh() {
     this.records = collectNotes(this.app, this.settings, { references: false });
+    this.computeBlockers();
     this.syncProjectSelect();
     this.renderBoard();
+  }
+  computeBlockers() {
+    const byPath = new Map(this.records.map((record) => [record.path, record]));
+    const map = /* @__PURE__ */ new Map();
+    const addBlocker = (blockedPath, blockerPath) => {
+      var _a, _b;
+      if (blockedPath === blockerPath)
+        return;
+      let entry = map.get(blockedPath);
+      if (!entry) {
+        entry = /* @__PURE__ */ new Map();
+        map.set(blockedPath, entry);
+      }
+      if (!entry.has(blockerPath)) {
+        const title = (_b = (_a = byPath.get(blockerPath)) == null ? void 0 : _a.title) != null ? _b : blockerPath;
+        entry.set(blockerPath, { path: blockerPath, title });
+      }
+    };
+    for (const record of this.records) {
+      for (const [key, value] of Object.entries(record.frontmatter)) {
+        const relationKey = relationKeyOf(key);
+        if (!relationKey || relationKey.kind !== "dependency")
+          continue;
+        for (const target of toTargetList(value)) {
+          const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
+          if (!(file instanceof import_obsidian12.TFile))
+            continue;
+          if (relationKey.inverted) {
+            addBlocker(record.path, file.path);
+          } else {
+            addBlocker(file.path, record.path);
+          }
+        }
+      }
+    }
+    this.blockersByPath = new Map(
+      [...map.entries()].map(([path, blockers]) => [path, [...blockers.values()]])
+    );
   }
   renderBoard() {
     this.columnsEl.empty();
@@ -3585,16 +3650,7 @@ var BoardView = class extends import_obsidian12.ItemView {
   }
   blockedBy(record) {
     var _a;
-    const targets = toTargetList(record.frontmatter.blocked_by);
-    const dependencies = [];
-    for (const target of targets) {
-      const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
-      if (!(file instanceof import_obsidian12.TFile))
-        continue;
-      const match = this.records.find((entry) => entry.path === file.path);
-      dependencies.push({ path: file.path, title: (_a = match == null ? void 0 : match.title) != null ? _a : file.basename });
-    }
-    return dependencies;
+    return (_a = this.blockersByPath.get(record.path)) != null ? _a : [];
   }
   renderBlockedBadge(card, blockers) {
     const details = card.createEl("details", { cls: "spm-board-blocked" });

@@ -1,19 +1,15 @@
 import { App, PropertyRenderContext, PropertyWidget, PropertyWidgetComponentBase, TFile, setIcon } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
-import { parseLinkTarget } from "../graph/relations";
+import { RELATION_PROPERTY_KEYS, parseLinkTarget } from "../graph/relations";
 import { wikilink } from "./relations";
 import { collectNotes } from "./notes";
 import { TaskSearchModal } from "../modals/TaskSearchModal";
 
 export const RELATION_WIDGET_TYPE = "simpromana-relation";
 
-/** Frontmatter keys this plugin renders as a task searcher instead of plain text. */
-export const RELATION_PROPERTY_KEYS = ["blocked_by", "blocks", "continues", "continued_by", "related"];
-
-function toValueArray(data: unknown): string[] {
+function toRawArray(data: unknown): unknown[] {
 	if (data === null || data === undefined) return [];
-	const values = Array.isArray(data) ? data : [data];
-	return values.filter((value): value is string => typeof value === "string");
+	return Array.isArray(data) ? data : [data];
 }
 
 function isValidRelationValue(value: unknown): boolean {
@@ -61,6 +57,8 @@ function relationCandidates(
 class RelationPropertyWidgetComponent implements PropertyWidgetComponentBase {
 	type = RELATION_WIDGET_TYPE;
 	private values: string[];
+	/** Non-string entries the widget can't render; kept as-is so editing doesn't erase them. */
+	private extras: unknown[];
 	private addButtonEl: HTMLElement | null = null;
 
 	constructor(
@@ -70,7 +68,9 @@ class RelationPropertyWidgetComponent implements PropertyWidgetComponentBase {
 		data: unknown,
 		private context: PropertyRenderContext
 	) {
-		this.values = toValueArray(data);
+		const raw = toRawArray(data);
+		this.values = raw.filter((value): value is string => typeof value === "string");
+		this.extras = raw.filter((value) => typeof value !== "string");
 		this.draw();
 	}
 
@@ -124,7 +124,7 @@ class RelationPropertyWidgetComponent implements PropertyWidgetComponentBase {
 	}
 
 	private commit(): void {
-		this.context.onChange([...this.values]);
+		this.context.onChange([...this.values, ...this.extras]);
 		this.draw();
 	}
 }

@@ -357,8 +357,9 @@ export class FlowView extends ItemView {
 
 		const collapsed = collapseHubs(scoped, preferences.hubLimit);
 		scoped = collapsed.graph;
+		const showMentionCount = preferences.drawKinds.mention;
 		for (const record of scoped.nodes) {
-			record.hiddenMentions = collapsed.hidden.get(record.path);
+			record.hiddenMentions = showMentionCount ? collapsed.hidden.get(record.path) : undefined;
 		}
 
 		scoped = filterRelationKinds(scoped, preferences.drawKinds);
@@ -525,6 +526,7 @@ export class FlowView extends ItemView {
 				item.onClick(async () => {
 					try {
 						await writeRelation(this.app, draft);
+						this.applyLocalRelation({ from: draft.from.path, to: draft.to.path, kind: draft.kind });
 						new Notice("Relation created.");
 					} catch (error) {
 						console.error("[Simpromana] Relation write error:", error);
@@ -575,6 +577,8 @@ export class FlowView extends ItemView {
 				item.onClick(async () => {
 					try {
 						await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
+						this.removeLocalRelation(relation);
+						this.applyLocalRelation({ from: relation.from, to: relation.to, kind: choice.kind });
 						new Notice("Relation updated.");
 					} catch (error) {
 						console.error("[Simpromana] Relation update error:", error);
@@ -593,6 +597,7 @@ export class FlowView extends ItemView {
 				.onClick(async () => {
 					try {
 						await deleteRelation(this.app, from, to, relation.kind);
+						this.removeLocalRelation(relation);
 						new Notice("Relation deleted.");
 					} catch (error) {
 						console.error("[Simpromana] Relation delete error:", error);
@@ -609,5 +614,18 @@ export class FlowView extends ItemView {
 		if (!(file instanceof TFile)) return;
 		const leaf = this.app.workspace.getLeaf(Keymap.isModEvent(event));
 		leaf.openFile(file);
+	}
+
+	/**
+	 * Patches the in-memory graph right after a write so immediately-following
+	 * relation actions validate against current state instead of the debounced
+	 * full refresh, which can lag up to 400ms behind a metadata change.
+	 */
+	private applyLocalRelation(relation: NoteRelation): void {
+		this.graph = { ...this.graph, relations: [...this.graph.relations, relation] };
+	}
+
+	private removeLocalRelation(relation: NoteRelation): void {
+		this.graph = { ...this.graph, relations: this.graph.relations.filter((entry) => entry !== relation) };
 	}
 }
