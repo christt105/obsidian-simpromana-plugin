@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => SimpromanaPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian14 = require("obsidian");
+var import_obsidian15 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -431,8 +431,121 @@ ${frontmatterLines.join("\n")}
   }
 };
 
-// src/lib/bases.ts
+// src/modals/CreateReferenceModal.ts
 var import_obsidian5 = require("obsidian");
+var NO_PROJECT2 = "__none__";
+var CreateReferenceModal = class extends import_obsidian5.Modal {
+  constructor(app, settings, presetProject = null) {
+    super(app);
+    this.settings = settings;
+    this.presetProject = presetProject;
+    this.title = "";
+    this.tags = "";
+    this.description = "";
+    this.date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    this.selectedProject = null;
+    this.projects = [];
+    this.lockedProject = false;
+  }
+  async onOpen() {
+    var _a;
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "New reference" });
+    this.projects = await getAllProjects(this.app, this.settings);
+    const contextProject = (_a = this.presetProject) != null ? _a : activeProjectFile(this.app, this.settings);
+    if (contextProject) {
+      this.selectedProject = contextProject;
+      this.lockedProject = true;
+    }
+    let titleInput;
+    new import_obsidian5.Setting(contentEl).setName("Title").addText((text) => {
+      titleInput = text.inputEl;
+      text.setPlaceholder("Reference title").onChange((v) => this.title = v);
+    });
+    if (this.lockedProject) {
+      new import_obsidian5.Setting(contentEl).setName("Project").setDesc(this.selectedProject.basename).setDisabled(true);
+    } else {
+      const projectOptions = {
+        [NO_PROJECT2]: "\u2014 No project \u2014"
+      };
+      for (const p of this.projects) {
+        projectOptions[p.path] = p.basename;
+      }
+      new import_obsidian5.Setting(contentEl).setName("Project").addDropdown((dd) => {
+        dd.addOptions(projectOptions).setValue(NO_PROJECT2).onChange((v) => {
+          this.selectedProject = v === NO_PROJECT2 ? null : this.app.vault.getAbstractFileByPath(v);
+        });
+      });
+    }
+    new import_obsidian5.Setting(contentEl).setName("Tags").setDesc("Comma-separated.").addText(
+      (text) => text.setPlaceholder("godot, tool, audit").onChange((v) => this.tags = v)
+    );
+    new import_obsidian5.Setting(contentEl).setName("Date").addText((text) => {
+      text.inputEl.type = "date";
+      text.setValue(this.date).onChange((v) => this.date = v);
+    });
+    new import_obsidian5.Setting(contentEl).setName("Description").addTextArea(
+      (text) => text.setPlaceholder("Short summary shown in the project's reference list.").onChange((v) => this.description = v)
+    );
+    new import_obsidian5.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("Create").setCta().onClick(() => this.submit())
+    );
+    contentEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !(e.target instanceof HTMLTextAreaElement)) {
+        this.submit();
+      }
+    });
+    setTimeout(() => titleInput == null ? void 0 : titleInput.focus(), 50);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+  async submit() {
+    const title = this.title.trim();
+    if (!title) {
+      new import_obsidian5.Notice("Reference title cannot be empty.");
+      return;
+    }
+    const id = generateId(6);
+    const fileName = `${title} - ${id}.md`;
+    const folder = referencesPath(this.settings);
+    const filePath = (0, import_obsidian5.normalizePath)(`${folder}/${fileName}`);
+    const tags = this.tags.split(",").map((t) => t.trim()).filter(Boolean);
+    const tagsYaml = tags.length > 0 ? `
+${tags.map((t) => `  - ${t}`).join("\n")}` : " []";
+    const projectLine = this.selectedProject ? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}` : "project:";
+    const dateLine = this.date.trim() ? `date: ${this.date.trim()}` : "date:";
+    const descriptionLine = `description: "${this.description.trim().replace(/"/g, '\\"')}"`;
+    const frontmatterLines = [
+      "type: reference",
+      `tags:${tagsYaml}`,
+      projectLine,
+      dateLine,
+      descriptionLine
+    ];
+    const content = `---
+${frontmatterLines.join("\n")}
+---
+# ${title}
+`;
+    try {
+      await ensureFolder(this.app, folder);
+      const file = await this.app.vault.create(filePath, content);
+      this.close();
+      await this.app.workspace.getLeaf().openFile(file);
+      new import_obsidian5.Notice(
+        this.selectedProject ? `\u2705 Reference linked to "${this.selectedProject.basename}" created.` : "\u2705 Reference created."
+      );
+    } catch (err) {
+      console.error("[Simpromana] CreateReference error:", err);
+      new import_obsidian5.Notice("\u274C Failed to create reference.");
+    }
+  }
+};
+
+// src/lib/bases.ts
+var import_obsidian6 = require("obsidian");
 function tasksBaseContent(s) {
   const tasksFolder = `${s.rootFolder}/${s.tasksFolder}`;
   return `filters:
@@ -493,10 +606,10 @@ views:
 `;
 }
 async function setupBases(app, s) {
-  const path = (0, import_obsidian5.normalizePath)(`${s.rootFolder}/Tasks.base`);
+  const path = (0, import_obsidian6.normalizePath)(`${s.rootFolder}/Tasks.base`);
   const content = tasksBaseContent(s);
   const existing = app.vault.getAbstractFileByPath(path);
-  if (existing instanceof import_obsidian5.TFile) {
+  if (existing instanceof import_obsidian6.TFile) {
     await app.vault.modify(existing, content);
   } else {
     await app.vault.create(path, content);
@@ -504,10 +617,10 @@ async function setupBases(app, s) {
 }
 
 // src/lib/relationPropertyWidget.ts
-var import_obsidian8 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 
 // src/lib/relations.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 function declaration(draft) {
   return draft.kind === "related" ? { owner: draft.from, target: draft.to } : { owner: draft.to, target: draft.from };
 }
@@ -518,7 +631,7 @@ async function writeRelation(app, draft) {
   const { owner, target } = declaration(draft);
   const file = app.vault.getAbstractFileByPath(owner.path);
   const targetFile = app.vault.getAbstractFileByPath(target.path);
-  if (!(file instanceof import_obsidian6.TFile) || !(targetFile instanceof import_obsidian6.TFile)) {
+  if (!(file instanceof import_obsidian7.TFile) || !(targetFile instanceof import_obsidian7.TFile)) {
     throw new Error("Task file not found.");
   }
   const key = CANONICAL_RELATION_KEYS[draft.kind];
@@ -538,7 +651,7 @@ async function writeRelation(app, draft) {
 }
 async function stripRelationFromNote(app, note, other, kind) {
   const file = app.vault.getAbstractFileByPath(note.path);
-  if (!(file instanceof import_obsidian6.TFile))
+  if (!(file instanceof import_obsidian7.TFile))
     return;
   await app.fileManager.processFrontMatter(file, (frontmatter) => {
     for (const key of Object.keys(frontmatter)) {
@@ -638,8 +751,8 @@ function projectFiles(app, settings) {
 }
 
 // src/modals/TaskSearchModal.ts
-var import_obsidian7 = require("obsidian");
-var TaskSearchModal = class extends import_obsidian7.FuzzySuggestModal {
+var import_obsidian8 = require("obsidian");
+var TaskSearchModal = class extends import_obsidian8.FuzzySuggestModal {
   constructor(app, items, onChoose) {
     super(app);
     this.items = items;
@@ -682,7 +795,7 @@ function resolveTarget(app, raw, sourcePath) {
 function relationCandidates(app, settings, sourcePath, currentValues) {
   var _a;
   const sourceFile = app.vault.getAbstractFileByPath(sourcePath);
-  if (!(sourceFile instanceof import_obsidian8.TFile))
+  if (!(sourceFile instanceof import_obsidian9.TFile))
     return [];
   const frontmatter = (_a = app.metadataCache.getFileCache(sourceFile)) == null ? void 0 : _a.frontmatter;
   const projectTarget = parseLinkTarget(frontmatter == null ? void 0 : frontmatter.project);
@@ -693,7 +806,7 @@ function relationCandidates(app, settings, sourcePath, currentValues) {
     if (resolved)
       excluded.add(resolved.path);
   }
-  return collectNotes(app, settings, { references: false }).filter((record) => record.kind === "task").filter((record) => !projectFile || record.projectPath === projectFile.path).filter((record) => !excluded.has(record.path)).map((record) => app.vault.getAbstractFileByPath(record.path)).filter((file) => file instanceof import_obsidian8.TFile).sort((a, b) => a.basename.localeCompare(b.basename));
+  return collectNotes(app, settings, { references: false }).filter((record) => record.kind === "task").filter((record) => !projectFile || record.projectPath === projectFile.path).filter((record) => !excluded.has(record.path)).map((record) => app.vault.getAbstractFileByPath(record.path)).filter((file) => file instanceof import_obsidian9.TFile).sort((a, b) => a.basename.localeCompare(b.basename));
 }
 var RelationPropertyWidgetComponent = class {
   constructor(app, settings, containerEl, data, context) {
@@ -722,7 +835,7 @@ var RelationPropertyWidgetComponent = class {
       cls: "spm-relation-add",
       attr: { type: "button", "aria-label": "Search tasks" }
     });
-    (0, import_obsidian8.setIcon)(this.addButtonEl, "plus");
+    (0, import_obsidian9.setIcon)(this.addButtonEl, "plus");
     this.addButtonEl.addEventListener("click", () => this.openSearch());
   }
   drawPill(raw, index) {
@@ -732,7 +845,7 @@ var RelationPropertyWidgetComponent = class {
     const pillEl = this.containerEl.createDiv({ cls: "spm-relation-pill" });
     pillEl.createSpan({ cls: "spm-relation-pill-label", text: label });
     const removeEl = pillEl.createDiv({ cls: "spm-relation-pill-remove" });
-    (0, import_obsidian8.setIcon)(removeEl, "x");
+    (0, import_obsidian9.setIcon)(removeEl, "x");
     removeEl.addEventListener("click", (evt) => {
       evt.stopPropagation();
       this.values.splice(index, 1);
@@ -773,7 +886,7 @@ function registerRelationPropertyWidget(app, settings) {
 }
 
 // src/views/FlowView.ts
-var import_obsidian11 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 
 // src/graph/build.ts
 function relationId(relation) {
@@ -1832,7 +1945,7 @@ function clonePreferences(preferences) {
 }
 
 // src/views/FlowCanvas.ts
-var import_obsidian9 = require("obsidian");
+var import_obsidian10 = require("obsidian");
 
 // src/views/CanvasGestures.ts
 var MIN_SCALE = 0.05;
@@ -2768,7 +2881,7 @@ var FlowCanvas = class {
     }
     holder.appendChild(card);
     group.appendChild(holder);
-    (0, import_obsidian9.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
+    (0, import_obsidian10.setTooltip)(card, this.tooltipFor(node), { delay: 400 });
     return group;
   }
   tooltipFor(node) {
@@ -2822,8 +2935,8 @@ var FlowCanvas = class {
 };
 
 // src/views/FlowSettingsModal.ts
-var import_obsidian10 = require("obsidian");
-var FlowSettingsModal = class extends import_obsidian10.Modal {
+var import_obsidian11 = require("obsidian");
+var FlowSettingsModal = class extends import_obsidian11.Modal {
   constructor(app, current, onApply, onReset) {
     super(app);
     this.onApply = onApply;
@@ -2871,7 +2984,7 @@ var FlowSettingsModal = class extends import_obsidian10.Modal {
       );
     }
     contentEl.createEl("h3", { text: "Filters" });
-    new import_obsidian10.Setting(contentEl).setName("Hub threshold").setDesc("Collapse mention edges for tasks with more connections than this. 0 keeps every mention.").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Hub threshold").setDesc("Collapse mention edges for tasks with more connections than this. 0 keeps every mention.").addText((text) => {
       text.inputEl.type = "number";
       text.setValue(String(this.draft.hubLimit)).onChange((value) => {
         const parsed = Number(value);
@@ -2880,11 +2993,11 @@ var FlowSettingsModal = class extends import_obsidian10.Modal {
       });
     });
     for (const kind of DRAWABLE_KINDS) {
-      new import_obsidian10.Setting(contentEl).setName(`Draw ${RELATION_LABELS[kind].toLowerCase()} relations`).addToggle(
+      new import_obsidian11.Setting(contentEl).setName(`Draw ${RELATION_LABELS[kind].toLowerCase()} relations`).addToggle(
         (toggle) => toggle.setValue(this.draft.drawKinds[kind]).onChange((value) => this.draft.drawKinds[kind] = value)
       );
     }
-    new import_obsidian10.Setting(contentEl).setName("Group unlinked tasks by").addDropdown((dropdown) => {
+    new import_obsidian11.Setting(contentEl).setName("Group unlinked tasks by").addDropdown((dropdown) => {
       for (const [mode, label] of Object.entries(GROUPING_LABELS)) {
         dropdown.addOption(mode, label);
       }
@@ -2892,7 +3005,7 @@ var FlowSettingsModal = class extends import_obsidian10.Modal {
         this.draft.grouping = value;
       });
     });
-    const actions = new import_obsidian10.Setting(contentEl);
+    const actions = new import_obsidian11.Setting(contentEl);
     actions.addButton(
       (button) => button.setButtonText("Reset to defaults").onClick(() => {
         this.onReset();
@@ -2910,7 +3023,7 @@ var FlowSettingsModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
   numberSetting(container, name, suffix, get, set, step = 1) {
-    new import_obsidian10.Setting(container).setName(suffix ? `${name} (${suffix})` : name).addText((text) => {
+    new import_obsidian11.Setting(container).setName(suffix ? `${name} (${suffix})` : name).addText((text) => {
       text.inputEl.type = "number";
       text.inputEl.step = String(step);
       text.setValue(String(get())).onChange((value) => {
@@ -2937,7 +3050,7 @@ var MODE_LABELS = {
 function shortTitle(title) {
   return title.length > 32 ? `${title.slice(0, 31)}\u2026` : title;
 }
-var FlowView = class extends import_obsidian11.ItemView {
+var FlowView = class extends import_obsidian12.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -2975,7 +3088,7 @@ var FlowView = class extends import_obsidian11.ItemView {
       onMenu: (path, client) => this.showMenu(path, client),
       onEdgeMenu: (relation, client) => this.showEdgeMenu(relation, client)
     });
-    const refresh = (0, import_obsidian11.debounce)(() => this.render(false), 400, true);
+    const refresh = (0, import_obsidian12.debounce)(() => this.render(false), 400, true);
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (this.isRelevant(file.path))
@@ -3102,7 +3215,7 @@ var FlowView = class extends import_obsidian11.ItemView {
     this.hiddenButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Hidden" });
     this.hiddenButton.addEventListener("click", () => this.setHidden([]));
     const newTaskButton = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian11.setIcon)(newTaskButton, "plus");
+    (0, import_obsidian12.setIcon)(newTaskButton, "plus");
     newTaskButton.setAttribute("aria-label", "New task");
     newTaskButton.addEventListener("click", () => this.openCreateTaskModal());
     this.connectButton = toolbar.createEl("button", { cls: "spm-flow-toggle", text: "Connect" });
@@ -3111,7 +3224,7 @@ var FlowView = class extends import_obsidian11.ItemView {
       this.connecting = !this.connecting;
       (_a = this.canvas) == null ? void 0 : _a.setConnecting(this.connecting);
       this.connectButton.toggleClass("is-active", this.connecting);
-      new import_obsidian11.Notice(
+      new import_obsidian12.Notice(
         this.connecting ? "Drag from one task to another to relate them." : "Connect mode off."
       );
     });
@@ -3122,25 +3235,25 @@ var FlowView = class extends import_obsidian11.ItemView {
       this.unpinButton.hide();
     });
     const zoomOut = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian11.setIcon)(zoomOut, "zoom-out");
+    (0, import_obsidian12.setIcon)(zoomOut, "zoom-out");
     zoomOut.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(0.8);
     });
     const zoomIn = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian11.setIcon)(zoomIn, "zoom-in");
+    (0, import_obsidian12.setIcon)(zoomIn, "zoom-in");
     zoomIn.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.zoomBy(1.25);
     });
     const fit = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian11.setIcon)(fit, "maximize");
+    (0, import_obsidian12.setIcon)(fit, "maximize");
     fit.addEventListener("click", () => {
       var _a;
       return (_a = this.canvas) == null ? void 0 : _a.fit();
     });
     const settingsButton = toolbar.createEl("button", { cls: "clickable-icon" });
-    (0, import_obsidian11.setIcon)(settingsButton, "settings");
+    (0, import_obsidian12.setIcon)(settingsButton, "settings");
     settingsButton.setAttribute("aria-label", "Flow view settings");
     settingsButton.addEventListener("click", () => {
       new FlowSettingsModal(
@@ -3268,10 +3381,10 @@ var FlowView = class extends import_obsidian11.ItemView {
   }
   openCreateTaskModal() {
     const project = this.projectPath ? this.app.vault.getAbstractFileByPath(this.projectPath) : null;
-    new CreateTaskModal(this.app, this.settings, project instanceof import_obsidian11.TFile ? project : void 0).open();
+    new CreateTaskModal(this.app, this.settings, project instanceof import_obsidian12.TFile ? project : void 0).open();
   }
   showMenu(path, client) {
-    const menu = new import_obsidian11.Menu();
+    const menu = new import_obsidian12.Menu();
     const record = path ? this.graph.nodes.find((entry) => entry.path === path) : null;
     if (!record) {
       menu.addItem(
@@ -3283,7 +3396,7 @@ var FlowView = class extends import_obsidian11.ItemView {
       menu.addItem(
         (item) => item.setTitle("Open").setIcon("file-text").onClick(() => {
           const file = this.app.vault.getAbstractFileByPath(record.path);
-          if (file instanceof import_obsidian11.TFile)
+          if (file instanceof import_obsidian12.TFile)
             this.app.workspace.getLeaf(false).openFile(file);
         })
       );
@@ -3294,7 +3407,7 @@ var FlowView = class extends import_obsidian11.ItemView {
         (item) => item.setTitle("Connect to another task\u2026").setIcon("git-branch").onClick(() => {
           var _a;
           (_a = this.canvas) == null ? void 0 : _a.beginConnectFrom(record.path);
-          new import_obsidian11.Notice("Tap another task to connect, or tap empty space to cancel.");
+          new import_obsidian12.Notice("Tap another task to connect, or tap empty space to cancel.");
         })
       );
       menu.addSeparator();
@@ -3329,7 +3442,7 @@ var FlowView = class extends import_obsidian11.ItemView {
       { label: `\u201C${shortTitle(to.title)}\u201D continues \u201C${shortTitle(from.title)}\u201D`, kind: "continuation" },
       { label: "Related", kind: "related" }
     ];
-    const menu = new import_obsidian11.Menu();
+    const menu = new import_obsidian12.Menu();
     for (const choice of choices) {
       const draft = { from, to, kind: choice.kind };
       const rejection = rejectionReason(this.graph, draft);
@@ -3340,10 +3453,10 @@ var FlowView = class extends import_obsidian11.ItemView {
           try {
             await writeRelation(this.app, draft);
             this.applyLocalRelation({ from: draft.from.path, to: draft.to.path, kind: draft.kind });
-            new import_obsidian11.Notice("Relation created.");
+            new import_obsidian12.Notice("Relation created.");
           } catch (error) {
             console.error("[Simpromana] Relation write error:", error);
-            new import_obsidian11.Notice("\u274C Could not write the relation.");
+            new import_obsidian12.Notice("\u274C Could not write the relation.");
           }
         });
       });
@@ -3351,7 +3464,7 @@ var FlowView = class extends import_obsidian11.ItemView {
     menu.showAtPosition(client);
   }
   showEdgeMenu(relation, client) {
-    const menu = new import_obsidian11.Menu();
+    const menu = new import_obsidian12.Menu();
     if (relation.kind === "mention") {
       menu.addItem(
         (item) => item.setTitle("Mentions come from links in the note body \u2014 edit the text to change them").setIcon("info").setDisabled(true)
@@ -3385,10 +3498,10 @@ var FlowView = class extends import_obsidian11.ItemView {
             await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
             this.removeLocalRelation(relation);
             this.applyLocalRelation({ from: relation.from, to: relation.to, kind: choice.kind });
-            new import_obsidian11.Notice("Relation updated.");
+            new import_obsidian12.Notice("Relation updated.");
           } catch (error) {
             console.error("[Simpromana] Relation update error:", error);
-            new import_obsidian11.Notice("\u274C Could not update the relation.");
+            new import_obsidian12.Notice("\u274C Could not update the relation.");
           }
         });
       });
@@ -3399,10 +3512,10 @@ var FlowView = class extends import_obsidian11.ItemView {
         try {
           await deleteRelation(this.app, from, to, relation.kind);
           this.removeLocalRelation(relation);
-          new import_obsidian11.Notice("Relation deleted.");
+          new import_obsidian12.Notice("Relation deleted.");
         } catch (error) {
           console.error("[Simpromana] Relation delete error:", error);
-          new import_obsidian11.Notice("\u274C Could not delete the relation.");
+          new import_obsidian12.Notice("\u274C Could not delete the relation.");
         }
       })
     );
@@ -3410,9 +3523,9 @@ var FlowView = class extends import_obsidian11.ItemView {
   }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian11.TFile))
+    if (!(file instanceof import_obsidian12.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian11.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian12.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
   /**
@@ -3429,10 +3542,10 @@ var FlowView = class extends import_obsidian11.ItemView {
 };
 
 // src/views/BoardView.ts
-var import_obsidian12 = require("obsidian");
+var import_obsidian13 = require("obsidian");
 var BOARD_VIEW_TYPE = "simpromana-board";
 var COLUMNS = ["Todo", "Doing", "Review", "Done"];
-var BoardView = class extends import_obsidian12.ItemView {
+var BoardView = class extends import_obsidian13.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -3456,7 +3569,7 @@ var BoardView = class extends import_obsidian12.ItemView {
     this.buildToolbar(root.createDiv({ cls: "spm-board-toolbar" }));
     this.columnsEl = root.createDiv({ cls: "spm-board-columns" });
     this.emptyEl = root.createDiv({ cls: "spm-board-empty" });
-    const refresh = (0, import_obsidian12.debounce)(() => this.refresh(), 400, true);
+    const refresh = (0, import_obsidian13.debounce)(() => this.refresh(), 400, true);
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
         if (this.isRelevant(file.path))
@@ -3549,7 +3662,7 @@ var BoardView = class extends import_obsidian12.ItemView {
           continue;
         for (const target of toTargetList(value)) {
           const file = this.app.metadataCache.getFirstLinkpathDest(target, record.path);
-          if (!(file instanceof import_obsidian12.TFile))
+          if (!(file instanceof import_obsidian13.TFile))
             continue;
           if (relationKey.inverted) {
             addBlocker(record.path, file.path);
@@ -3676,7 +3789,7 @@ var BoardView = class extends import_obsidian12.ItemView {
     if (record && record.status.toLowerCase() === column.toLowerCase())
       return;
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian12.TFile))
+    if (!(file instanceof import_obsidian13.TFile))
       return;
     try {
       await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
@@ -3687,27 +3800,27 @@ var BoardView = class extends import_obsidian12.ItemView {
       this.renderBoard();
     } catch (error) {
       console.error("[Simpromana] Board status update error:", error);
-      new import_obsidian12.Notice("\u274C Could not update the task status.");
+      new import_obsidian13.Notice("\u274C Could not update the task status.");
     }
   }
   openTask(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian12.TFile))
+    if (!(file instanceof import_obsidian13.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian12.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian13.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/views/ProjectPanelView.ts
-var import_obsidian13 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 var PROJECT_PANEL_VIEW_TYPE = "simpromana-project-panel";
 var STATUS_ORDER2 = ["Doing", "Review", "Todo", "Done", "Archive", "Archived"];
 function statusRank(status) {
   const index = STATUS_ORDER2.indexOf(status);
   return index === -1 ? STATUS_ORDER2.length : index;
 }
-var ProjectPanelView = class extends import_obsidian13.ItemView {
+var ProjectPanelView = class extends import_obsidian14.ItemView {
   constructor(leaf, settings) {
     super(leaf);
     this.settings = settings;
@@ -3728,7 +3841,7 @@ var ProjectPanelView = class extends import_obsidian13.ItemView {
     root.addClass("spm-panel");
     this.headerEl = root.createDiv({ cls: "spm-panel-header" });
     this.bodyEl = root.createDiv({ cls: "spm-panel-body" });
-    const refresh = (0, import_obsidian13.debounce)(() => this.render(), 200, true);
+    const refresh = (0, import_obsidian14.debounce)(() => this.render(), 200, true);
     this.registerEvent(this.app.workspace.on("active-leaf-change", refresh));
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
@@ -3851,15 +3964,15 @@ var ProjectPanelView = class extends import_obsidian13.ItemView {
   }
   openNote(path, event) {
     const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof import_obsidian13.TFile))
+    if (!(file instanceof import_obsidian14.TFile))
       return;
-    const leaf = this.app.workspace.getLeaf(import_obsidian13.Keymap.isModEvent(event));
+    const leaf = this.app.workspace.getLeaf(import_obsidian14.Keymap.isModEvent(event));
     leaf.openFile(file);
   }
 };
 
 // src/main.ts
-var SimpromanaPlugin = class extends import_obsidian14.Plugin {
+var SimpromanaPlugin = class extends import_obsidian15.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SimpromanaSettingTab(this.app, this));
@@ -3901,15 +4014,20 @@ var SimpromanaPlugin = class extends import_obsidian14.Plugin {
       callback: () => new CreateTaskModal(this.app, this.settings).open()
     });
     this.addCommand({
+      id: "create-reference",
+      name: "New reference",
+      callback: () => new CreateReferenceModal(this.app, this.settings).open()
+    });
+    this.addCommand({
       id: "setup-bases",
       name: "Setup bases",
       callback: async () => {
         try {
           await setupBases(this.app, this.settings);
-          new import_obsidian14.Notice("\u2705 Tasks.base updated.");
+          new import_obsidian15.Notice("\u2705 Tasks.base updated.");
         } catch (err) {
           console.error("[Simpromana] Setup bases error:", err);
-          new import_obsidian14.Notice("\u274C Failed to update Tasks.base.");
+          new import_obsidian15.Notice("\u274C Failed to update Tasks.base.");
         }
       }
     });
@@ -3936,7 +4054,7 @@ var SimpromanaPlugin = class extends import_obsidian14.Plugin {
     });
   }
   confirmArchiveTask(file) {
-    const modal = new import_obsidian14.ConfirmationModal(this.app);
+    const modal = new import_obsidian15.ConfirmationModal(this.app);
     modal.setTitle("Archive task");
     modal.setContent(
       `Set "${file.basename}" to tstatus: Archive and move it into "${this.settings.archiveFolder}"?`
@@ -3954,12 +4072,12 @@ var SimpromanaPlugin = class extends import_obsidian14.Plugin {
       });
       const folder = archivePath(this.settings);
       await ensureFolder(this.app, folder);
-      const newPath = (0, import_obsidian14.normalizePath)(`${folder}/${file.name}`);
+      const newPath = (0, import_obsidian15.normalizePath)(`${folder}/${file.name}`);
       await this.app.fileManager.renameFile(file, newPath);
-      new import_obsidian14.Notice(`\u2705 Task "${file.basename}" archived.`);
+      new import_obsidian15.Notice(`\u2705 Task "${file.basename}" archived.`);
     } catch (err) {
       console.error("[Simpromana] Archive task error:", err);
-      new import_obsidian14.Notice("\u274C Failed to archive task.");
+      new import_obsidian15.Notice("\u274C Failed to archive task.");
     }
   }
   async openFlowView() {

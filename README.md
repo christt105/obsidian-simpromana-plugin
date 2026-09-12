@@ -33,9 +33,10 @@ Simpromana organizes a vault into three note types, distinguished by a
   project note — required for the task to appear in that project's
   `Tasks.base` view).
 - **`reference`** (`Reference/Title - abc123.md`) — write-ups, audits,
-  analyses; not actionable by themselves. Simpromana doesn't scaffold
-  these notes yet, so create them by hand with `type: reference` and a
-  `project` link.
+  analyses; not actionable by themselves. Created via the *New reference*
+  command. Frontmatter: `type: reference`, `tags`, `project` (a wikilink
+  to the parent project note — required for the reference to appear in
+  that project's `References.base` view), `date`, `description`.
 
 ### Relations between tasks
 
@@ -58,8 +59,8 @@ subfolder names.
 
 ## Commands
 
-- **New project** / **New task** — scaffold a note with the frontmatter
-  above.
+- **New project** / **New task** / **New reference** — scaffold a note
+  with the frontmatter above.
 - **Setup bases** — (re)generates `<root>/Tasks.base`, with `Current`
   (tasks linking to the active note, e.g. embedded in a project),
   `Board` (all tasks, grouped by project), and `Table` views. Run it again
