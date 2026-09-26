@@ -4,7 +4,7 @@ An Obsidian plugin for project and task management: a task flow graph, a
 kanban board, a project side panel, and commands to keep `Projects`,
 `Tasks`, and `Reference` notes wired together through frontmatter.
 
-![Simpromana overview](docs/screenshot.png)
+![Simpromana overview](docs/cover.png)
 
 ## Features
 
@@ -48,7 +48,7 @@ interest.
 - Obsidian 1.4.0+.
 - The core **Bases** plugin, if you want the `Tasks.base` /
   `References.base` views embedded in project notes.
-- Recommended: the community plugin **[Kanban for Bases](https://github.com/kotchourko/obsidian-bases-kanban)**,
+- Recommended: the community plugin **[Base Board](https://community.obsidian.md/plugins/base-board)**,
   which the generated `Tasks.base` views use. Without it, those views
   fall back to a plain table.
 
@@ -77,3 +77,23 @@ Under Settings → Simpromana: the root folder and the `Projects` /
 - The *Setup bases* command generates `Tasks.base` but not
   `References.base`; if a project note embeds it, create that file
   manually first.
+
+## Screenshots
+
+![Task Flow View](./docs/task-flow.png)
+
+![Task Flow Force View](./docs/task-flow-force.png)
+
+![Project Board](./docs/project-board.png)
+
+![Project Note](./docs/project-note.png)
+
+![Task Note](./docs/task-note.png)
+
+![Board View](./docs/board-view.png)
+
+![Create Task Panel](./docs/create-task-panel.png)
+
+## License
+
+Licensed under [MIT](LICENSE) License.
