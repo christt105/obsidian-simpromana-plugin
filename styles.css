@@ -664,6 +664,8 @@
 .spm-panel-link:hover {
 	color: var(--text-accent);
 	text-decoration: underline;
+}
+
 .spm-relation-widget {
 	display: flex;
 	flex-wrap: wrap;
@@ -712,6 +714,8 @@
 .spm-relation-add:hover {
 	background-color: var(--background-modifier-hover);
 	color: var(--text-normal);
+}
+
 .spm-flow-settings h3 {
 	margin-top: var(--size-4-4);
 	margin-bottom: var(--size-2-2);

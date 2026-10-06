@@ -22,12 +22,14 @@ kanban board, a project side panel, and commands to keep `Projects`,
 
 ## Installation
 
-Simpromana isn't in Obsidian's community plugin list yet, so install it
-with [BRAT](https://github.com/TfTHacker/obsidian42-brat) or manually.
+**Community plugins (recommended)**
 
-**BRAT (recommended)**
+1. Open Settings → Community plugins → Browse.
+2. Search for *Simpromana*, install it, and enable it.
 
-1. Install the BRAT community plugin.
+**BRAT (pre-releases)**
+
+1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin.
 2. In BRAT, *Add beta plugin*, and enter `christt105/obsidian-simpromana-plugin`.
 3. Enable Simpromana under Settings → Community plugins.
 
@@ -38,14 +40,16 @@ with [BRAT](https://github.com/TfTHacker/obsidian42-brat) or manually.
 2. Copy them into `<vault>/.obsidian/plugins/simpromana/`.
 3. Enable Simpromana under Settings → Community plugins.
 
-Simpromana isn't submitted to the official list because its frontmatter
-fields and folder conventions are opinionated, built around how I
-personally organize my own vault. That can change if it picks up
-interest.
+Release assets carry GitHub build provenance attestations, so you can
+check they were built from this repository with
+`gh attestation verify main.js --repo christt105/obsidian-simpromana-plugin`.
+
+The frontmatter fields and folder conventions are opinionated, built
+around how I personally organize my own vault.
 
 ## Requirements
 
-- Obsidian 1.4.0+.
+- Obsidian 1.13.0+.
 - The core **Bases** plugin, if you want the `Tasks.base` /
   `References.base` views embedded in project notes.
 - Recommended: the community plugin **[Base Board](https://community.obsidian.md/plugins/base-board)**,
@@ -69,6 +73,13 @@ configurable yet.
 
 Under Settings → Simpromana: the root folder and the `Projects` /
 `Tasks` / `Reference` / `Archive` subfolder names.
+
+## Privacy
+
+Simpromana lists the notes in your vault to find projects, tasks, and
+references by their `type` frontmatter, and edits their frontmatter
+when you change a status or a relation. It makes no network requests;
+nothing leaves your vault.
 
 ## Known limitations
 

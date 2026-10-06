@@ -77,10 +77,10 @@ export class CreateProjectModal extends Modal {
 		);
 
 		contentEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter" && !e.shiftKey) this.submit();
+			if (e.key === "Enter" && !e.shiftKey) void this.submit();
 		});
 
-		setTimeout(() => nameInput?.focus(), 50);
+		window.setTimeout(() => nameInput?.focus(), 50);
 	}
 
 	onClose(): void {

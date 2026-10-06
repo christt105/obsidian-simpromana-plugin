@@ -58,7 +58,7 @@ export class CanvasGestures {
 	private renderFrame = 0;
 	private rect: DOMRect | null = null;
 	private rectTime = 0;
-	private longPress: ReturnType<typeof setTimeout> | null = null;
+	private longPress: number | null = null;
 
 	constructor(private element: SVGSVGElement, private handlers: GestureHandlers) {
 		element.addEventListener("wheel", this.onWheel, { passive: false });
@@ -75,7 +75,7 @@ export class CanvasGestures {
 
 	destroy(): void {
 		this.stopMotion();
-		if (this.renderFrame) cancelAnimationFrame(this.renderFrame);
+		if (this.renderFrame) window.cancelAnimationFrame(this.renderFrame);
 		this.element.removeEventListener("wheel", this.onWheel);
 		this.element.removeEventListener("pointerdown", this.onPointerDown);
 		this.element.removeEventListener("pointermove", this.onPointerMove);
@@ -136,9 +136,9 @@ export class CanvasGestures {
 				k: from.k + (target.k - from.k) * eased,
 			};
 			this.apply();
-			this.animationFrame = progress < 1 ? requestAnimationFrame(step) : 0;
+			this.animationFrame = progress < 1 ? window.requestAnimationFrame(step) : 0;
 		};
-		this.animationFrame = requestAnimationFrame(step);
+		this.animationFrame = window.requestAnimationFrame(step);
 	}
 
 	zoomBy(factor: number, animate = true): void {
@@ -186,15 +186,15 @@ export class CanvasGestures {
 
 	private schedule(): void {
 		if (this.renderFrame) return;
-		this.renderFrame = requestAnimationFrame(() => {
+		this.renderFrame = window.requestAnimationFrame(() => {
 			this.renderFrame = 0;
 			this.apply();
 		});
 	}
 
 	private stopMotion(): void {
-		if (this.inertiaFrame) cancelAnimationFrame(this.inertiaFrame);
-		if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+		if (this.inertiaFrame) window.cancelAnimationFrame(this.inertiaFrame);
+		if (this.animationFrame) window.cancelAnimationFrame(this.animationFrame);
 		this.inertiaFrame = 0;
 		this.animationFrame = 0;
 	}
@@ -216,10 +216,10 @@ export class CanvasGestures {
 
 			this.inertiaFrame =
 				Math.hypot(this.velocity.x, this.velocity.y) > MIN_VELOCITY
-					? requestAnimationFrame(step)
+					? window.requestAnimationFrame(step)
 					: 0;
 		};
-		this.inertiaFrame = requestAnimationFrame(step);
+		this.inertiaFrame = window.requestAnimationFrame(step);
 	}
 
 	private onPointerDown = (event: PointerEvent): void => {
@@ -364,13 +364,13 @@ export class CanvasGestures {
 	};
 
 	private cancelLongPress(): void {
-		if (this.longPress !== null) clearTimeout(this.longPress);
+		if (this.longPress !== null) window.clearTimeout(this.longPress);
 		this.longPress = null;
 	}
 
 	private armLongPress(point: Point): void {
 		this.cancelLongPress();
-		this.longPress = setTimeout(() => {
+		this.longPress = window.setTimeout(() => {
 			this.longPress = null;
 			this.endNodeDrag(this.toGraph(point));
 			this.mode = "none";

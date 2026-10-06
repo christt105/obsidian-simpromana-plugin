@@ -38,7 +38,7 @@ export default class SimpromanaPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-board",
-			name: "Open Board",
+			name: "Open board",
 			callback: () => this.openBoardView(),
 		});
 
@@ -119,7 +119,7 @@ export default class SimpromanaPlugin extends Plugin {
 
 	private async archiveTask(file: TFile): Promise<void> {
 		try {
-			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 				frontmatter.tstatus = "Archive";
 			});
 			const folder = archivePath(this.settings);
@@ -163,7 +163,7 @@ export default class SimpromanaPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as Partial<SimpromanaSettings> | null);
 	}
 
 	async saveSettings(): Promise<void> {
