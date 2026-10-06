@@ -72,10 +72,10 @@ export default class SimpromanaPlugin extends Plugin {
 			callback: async () => {
 				try {
 					await setupBases(this.app, this.settings);
-					new Notice("✅ Tasks.base updated.");
+					new Notice("✅ Tasks.base and References.base updated.");
 				} catch (err) {
 					console.error("[Simpromana] Setup bases error:", err);
-					new Notice("❌ Failed to update Tasks.base.");
+					new Notice("❌ Failed to update the bases.");
 				}
 			},
 		});

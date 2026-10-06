@@ -61,13 +61,59 @@ views:
 `;
 }
 
-export async function setupBases(app: App, s: SimpromanaSettings): Promise<void> {
-	const path = normalizePath(`${s.rootFolder}/Tasks.base`);
-	const content = tasksBaseContent(s);
-	const existing = app.vault.getAbstractFileByPath(path);
+function referencesBaseContent(s: SimpromanaSettings): string {
+	const referencesFolder = `${s.rootFolder}/${s.referencesFolder}`;
+	return `filters:
+  and:
+    - file.folder == "${referencesFolder}"
+formulas:
+  referenceNameLink: link(file.path, file.name)
+  project_link: link(project, project.split('/')[-1])
+properties:
+  file.name:
+    displayName: Reference
+views:
+  - type: table
+    name: Current
+    filters:
+      and:
+        - note.project == this
+    order:
+      - formula.referenceNameLink
+      - description
+      - date
+      - tags
+    sort:
+      - property: file.ctime
+        direction: DESC
+  - type: table
+    name: All
+    groupBy:
+      property: project
+      direction: ASC
+    order:
+      - formula.referenceNameLink
+      - formula.project_link
+      - description
+      - date
+      - tags
+    sort:
+      - property: file.ctime
+        direction: DESC
+`;
+}
+
+async function writeBase(app: App, path: string, content: string): Promise<void> {
+	const normalized = normalizePath(path);
+	const existing = app.vault.getAbstractFileByPath(normalized);
 	if (existing instanceof TFile) {
 		await app.vault.modify(existing, content);
 	} else {
-		await app.vault.create(path, content);
+		await app.vault.create(normalized, content);
 	}
+}
+
+export async function setupBases(app: App, s: SimpromanaSettings): Promise<void> {
+	await writeBase(app, `${s.rootFolder}/Tasks.base`, tasksBaseContent(s));
+	await writeBase(app, `${s.rootFolder}/References.base`, referencesBaseContent(s));
 }

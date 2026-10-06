@@ -88,9 +88,6 @@ nothing leaves your vault.
 
 - Frontmatter property names and status vocabulary are hardcoded across
   the plugin.
-- The *Setup bases* command generates `Tasks.base` but not
-  `References.base`; if a project note embeds it, create that file
-  manually first.
 
 ## Screenshots
 
