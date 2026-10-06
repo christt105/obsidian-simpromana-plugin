@@ -20,7 +20,7 @@ import {
 	selectSubgraph,
 } from "../graph/build";
 import { rejectionReason } from "../graph/validate";
-import { changeRelationKind, deleteRelation, writeRelation } from "../lib/relations";
+import { changeRelationKind, deleteRelation, relationKeys, writeRelation } from "../lib/relations";
 import { DEFAULT_LAYOUT_OPTIONS, layoutGraph } from "../graph/layout";
 import type { LayoutOptions } from "../graph/layout";
 import { DEFAULT_FORCE_OPTIONS } from "../graph/force";
@@ -337,6 +337,7 @@ export class FlowView extends ItemView {
 		const records = collectNotes(this.app, this.settings, { references: this.references });
 		const graph = buildNoteGraph(records, createNoteResolver(this.app, records), {
 			mentions: true,
+			relationKeys: relationKeys(this.settings),
 		});
 
 		const projectPath = this.projectPath;
@@ -525,7 +526,7 @@ export class FlowView extends ItemView {
 				item.setDisabled(rejection !== null);
 				item.onClick(async () => {
 					try {
-						await writeRelation(this.app, draft);
+						await writeRelation(this.app, relationKeys(this.settings), draft);
 						this.applyLocalRelation({ from: draft.from.path, to: draft.to.path, kind: draft.kind });
 						new Notice("Relation created.");
 					} catch (error) {
@@ -576,7 +577,7 @@ export class FlowView extends ItemView {
 				item.setDisabled(rejection !== null);
 				item.onClick(async () => {
 					try {
-						await changeRelationKind(this.app, from, to, relation.kind, choice.kind);
+						await changeRelationKind(this.app, relationKeys(this.settings), from, to, relation.kind, choice.kind);
 						this.removeLocalRelation(relation);
 						this.applyLocalRelation({ from: relation.from, to: relation.to, kind: choice.kind });
 						new Notice("Relation updated.");
@@ -596,7 +597,7 @@ export class FlowView extends ItemView {
 				.setWarning(true)
 				.onClick(async () => {
 					try {
-						await deleteRelation(this.app, from, to, relation.kind);
+						await deleteRelation(this.app, relationKeys(this.settings), from, to, relation.kind);
 						this.removeLocalRelation(relation);
 						new Notice("Relation deleted.");
 					} catch (error) {

@@ -128,15 +128,16 @@ export class CreateReferenceModal extends Modal {
 
 		const tagsYaml = tags.length > 0 ? `\n${tags.map((t) => `  - ${t}`).join("\n")}` : " []";
 
+		const { projectProperty, typeProperty } = this.settings;
 		const projectLine = this.selectedProject
-			? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}`
-			: "project:";
+			? `${projectProperty}: ${projectWikilink(this.settings, this.selectedProject.basename)}`
+			: `${projectProperty}:`;
 
 		const dateLine = this.date.trim() ? `date: ${this.date.trim()}` : "date:";
 		const descriptionLine = `description: "${this.description.trim().replace(/"/g, '\\"')}"`;
 
 		const frontmatterLines = [
-			"type: reference",
+			`${typeProperty}: reference`,
 			`tags:${tagsYaml}`,
 			projectLine,
 			dateLine,

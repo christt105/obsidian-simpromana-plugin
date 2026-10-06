@@ -57,11 +57,11 @@ export function activeProjectFile(app: App, s: SimpromanaSettings): TFile | null
 	const active = app.workspace.getActiveFile();
 	if (!active) return null;
 	const fm = app.metadataCache.getFileCache(active)?.frontmatter;
-	if (fm?.type === "project" && active.path.startsWith(projectsPath(s))) {
+	if (fm?.[s.typeProperty] === "project" && active.path.startsWith(projectsPath(s))) {
 		return active;
 	}
-	if (fm?.type === "task") {
-		const projectTarget = parseLinkTarget(fm.project);
+	if (fm?.[s.typeProperty] === "task") {
+		const projectTarget = parseLinkTarget(fm[s.projectProperty]);
 		const projectFile = projectTarget
 			? app.metadataCache.getFirstLinkpathDest(projectTarget, active.path)
 			: null;

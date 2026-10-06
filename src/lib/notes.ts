@@ -20,11 +20,11 @@ function stringValue(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
-function readNote(app: App, file: TFile, kind: NoteKind): NoteRecord {
+function readNote(app: App, settings: SimpromanaSettings, file: TFile, kind: NoteKind): NoteRecord {
 	const cache = app.metadataCache.getFileCache(file);
 	const frontmatter = cache?.frontmatter ?? {};
 	const { title, id } = splitBasename(file.basename);
-	const projectTarget = parseLinkTarget(frontmatter.project);
+	const projectTarget = parseLinkTarget(frontmatter[settings.projectProperty]);
 	const projectFile = projectTarget
 		? app.metadataCache.getFirstLinkpathDest(projectTarget, file.path)
 		: null;
@@ -37,10 +37,10 @@ function readNote(app: App, file: TFile, kind: NoteKind): NoteRecord {
 		id,
 		projectPath: projectFile?.path ?? null,
 		projectName: projectFile?.basename ?? projectTarget?.split("/").pop() ?? null,
-		status: kind === "task" ? stringValue(frontmatter.tstatus) || "Todo" : "",
-		priority: stringValue(frontmatter.priority),
-		milestone: stringValue(frontmatter.milestone) || null,
-		epic: stringValue(frontmatter.epic) || null,
+		status: kind === "task" ? stringValue(frontmatter[settings.taskStatusProperty]) || "Todo" : "",
+		priority: stringValue(frontmatter[settings.priorityProperty]),
+		milestone: stringValue(frontmatter[settings.milestoneProperty]) || null,
+		epic: stringValue(frontmatter[settings.epicProperty]) || null,
 		frontmatter,
 		links: (cache?.links ?? []).map((link) => link.link),
 	};
@@ -57,9 +57,9 @@ export function collectNotes(
 
 	for (const file of app.vault.getMarkdownFiles()) {
 		if (file.path.startsWith(taskPrefix)) {
-			records.push(readNote(app, file, "task"));
+			records.push(readNote(app, settings, file, "task"));
 		} else if (options.references && file.path.startsWith(referencePrefix)) {
-			records.push(readNote(app, file, "reference"));
+			records.push(readNote(app, settings, file, "reference"));
 		}
 	}
 

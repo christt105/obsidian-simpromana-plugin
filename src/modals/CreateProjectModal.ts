@@ -112,11 +112,12 @@ export class CreateProjectModal extends Modal {
 				? `\n${tags.map((t) => `  - ${t}`).join("\n")}`
 				: " []";
 
-		const root = this.settings.rootFolder;
+		const p = this.settings;
+		const root = p.rootFolder;
 		const content = `---
-pstatus: ${this.pstatus}
-type: project
-priority: ${this.priority}
+${p.projectStatusProperty}: ${this.pstatus}
+${p.typeProperty}: project
+${p.priorityProperty}: ${this.priority}
 tags:${tagsYaml}
 github: ${this.github.trim()}
 banner:

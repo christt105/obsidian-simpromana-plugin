@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CANONICAL_RELATION_KEYS, parseLinkTarget, relationKeyOf, toTargetList } from "./relations";
+import { RelationKeys, parseLinkTarget, toTargetList } from "./relations";
+
+const defaults = new RelationKeys();
+const relationKeyOf = (key: string) => defaults.keyOf(key);
 
 describe("relationKeyOf", () => {
 	it("resolves every documented alias to its canonical kind", () => {
@@ -27,11 +30,37 @@ describe("relationKeyOf", () => {
 	});
 });
 
-describe("CANONICAL_RELATION_KEYS", () => {
-	it("maps every ordering/related kind back to a relationKeyOf-recognized key", () => {
-		expect(relationKeyOf(CANONICAL_RELATION_KEYS.dependency)?.kind).toBe("dependency");
-		expect(relationKeyOf(CANONICAL_RELATION_KEYS.continuation)?.kind).toBe("continuation");
-		expect(relationKeyOf(CANONICAL_RELATION_KEYS.related)?.kind).toBe("related");
+describe("RelationKeys.canonicalKey", () => {
+	it("maps every ordering/related kind back to a recognized key", () => {
+		expect(relationKeyOf(defaults.canonicalKey("dependency"))?.kind).toBe("dependency");
+		expect(relationKeyOf(defaults.canonicalKey("continuation"))?.kind).toBe("continuation");
+		expect(relationKeyOf(defaults.canonicalKey("related"))?.kind).toBe("related");
+	});
+});
+
+describe("RelationKeys with configured keys", () => {
+	const custom = new RelationKeys({ dependency: "waits_on", continuation: "after", related: "see_also" });
+
+	it("writes new relations under the configured keys", () => {
+		expect(custom.canonicalKey("dependency")).toBe("waits_on");
+		expect(custom.canonicalKey("continuation")).toBe("after");
+		expect(custom.canonicalKey("related")).toBe("see_also");
+		expect(custom.canonicalKey("mention")).toBe("");
+	});
+
+	it("reads the configured keys with the same direction as the defaults", () => {
+		expect(custom.keyOf("waits_on")).toMatchObject({ kind: "dependency", inverted: true });
+		expect(custom.keyOf("after")).toMatchObject({ kind: "continuation", inverted: true });
+		expect(custom.keyOf("see_also")).toMatchObject({ kind: "related", inverted: false });
+	});
+
+	it("keeps recognizing the built-in aliases", () => {
+		expect(custom.keyOf("blocked_by")).toMatchObject({ kind: "dependency", inverted: true });
+		expect(custom.keyOf("blocks")).toMatchObject({ kind: "dependency", inverted: false });
+	});
+
+	it("lists the configured keys among the relation properties", () => {
+		expect(custom.propertyKeys()).toEqual(expect.arrayContaining(["waits_on", "after", "see_also", "blocked_by"]));
 	});
 });
 

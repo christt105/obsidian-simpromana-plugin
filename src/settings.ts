@@ -1,21 +1,22 @@
 import { App, PluginSettingTab, SettingDefinitionItem } from "obsidian";
 import type SimpromanaPlugin from "./main";
+import { DEFAULT_SETTINGS, type SimpromanaSettings } from "./defaults";
 
-export interface SimpromanaSettings {
-	rootFolder: string;
-	projectsFolder: string;
-	tasksFolder: string;
-	referencesFolder: string;
-	archiveFolder: string;
-}
+export { DEFAULT_SETTINGS, type SimpromanaSettings };
 
-export const DEFAULT_SETTINGS: SimpromanaSettings = {
-	rootFolder: "Project Management",
-	projectsFolder: "Projects",
-	tasksFolder: "Tasks",
-	referencesFolder: "Reference",
-	archiveFolder: "Archive",
-};
+const PROPERTY_SETTINGS: { key: SettingKey; name: string; desc: string }[] = [
+	{ key: "typeProperty", name: "Note type", desc: "Holds project, task, or reference." },
+	{ key: "projectProperty", name: "Project link", desc: "Links a task or reference to its project." },
+	{ key: "taskStatusProperty", name: "Task status", desc: "Status of a task; drives the board columns." },
+	{ key: "projectStatusProperty", name: "Project status", desc: "Status of a project." },
+	{ key: "priorityProperty", name: "Priority", desc: "Priority of a task or project." },
+	{ key: "milestoneProperty", name: "Milestone", desc: "Optional milestone label of a task." },
+	{ key: "epicProperty", name: "Epic", desc: "Optional epic label grouping tasks in the flow view." },
+	{ key: "dueDateProperty", name: "Due date", desc: "Optional due date of a task." },
+	{ key: "blockedByProperty", name: "Blocked by", desc: "Lists the tasks that block this one." },
+	{ key: "continuesProperty", name: "Continues", desc: "Lists the tasks this one continues." },
+	{ key: "relatedProperty", name: "Related", desc: "Lists related tasks." },
+];
 
 type SettingKey = keyof SimpromanaSettings;
 
@@ -35,6 +36,15 @@ export class SimpromanaSettingTab extends PluginSettingTab {
 			{ name: "Tasks subfolder", control: { type: "text", key: "tasksFolder" } },
 			{ name: "References subfolder", control: { type: "text", key: "referencesFolder" } },
 			{ name: "Archive subfolder", control: { type: "text", key: "archiveFolder" } },
+			{
+				type: "group",
+				heading: "Frontmatter properties",
+				items: PROPERTY_SETTINGS.map(({ key, name, desc }) => ({
+					name,
+					desc: `${desc} Renaming does not update existing notes.`,
+					control: { type: "text", key, placeholder: DEFAULT_SETTINGS[key] },
+				})),
+			},
 		];
 	}
 
@@ -44,7 +54,9 @@ export class SimpromanaSettingTab extends PluginSettingTab {
 
 	async setControlValue(key: string, value: unknown): Promise<void> {
 		if (typeof value !== "string") return;
-		this.plugin.settings[key as SettingKey] = value.trim();
+		const trimmed = value.trim();
+		this.plugin.settings[key as SettingKey] =
+			trimmed || (key.endsWith("Property") ? DEFAULT_SETTINGS[key as SettingKey] : trimmed);
 		await this.plugin.saveSettings();
 	}
 }

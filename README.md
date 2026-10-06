@@ -69,14 +69,24 @@ around how I personally organize my own vault.
 - **`reference`** (`Reference/Title - abc123.md`): write-ups and audits,
   created via *New reference*, also linked back to a `project`.
 
-Frontmatter field names (`tstatus`, `pstatus`, `type`, relation keys) and
-the status vocabulary (`Todo`/`Doing`/`Review`/`Done`) are fixed, not
-configurable yet.
+Frontmatter property names are configurable (see Settings). The status
+vocabulary (`Todo`/`Doing`/`Review`/`Done`) and the `type` values
+(`project`/`task`/`reference`) are fixed.
 
 ## Settings
 
-Under Settings → Simpromana: the root folder and the `Projects` /
-`Tasks` / `Reference` / `Archive` subfolder names.
+Under Settings → Simpromana:
+
+- The root folder and the `Projects` / `Tasks` / `Reference` / `Archive`
+  subfolder names.
+- The frontmatter property names: note type (`type`), project link
+  (`project`), task and project status (`tstatus`, `pstatus`), `priority`,
+  `milestone`, `epic`, `due_date`, and the keys new relations are written
+  under (`blocked_by`, `continues`, `related`). The built-in relation
+  aliases (`blocks`, `depends_on`, `continued_by`, `follows`,
+  `related_to`, …) keep working. Renaming a property doesn't touch
+  existing notes; rename it in them yourself, and re-run *Setup bases*
+  after deleting the old `.base` files.
 
 ## Privacy
 
@@ -87,8 +97,7 @@ nothing leaves your vault.
 
 ## Known limitations
 
-- Frontmatter property names and status vocabulary are hardcoded across
-  the plugin.
+- The status vocabulary is hardcoded across the plugin.
 
 ## Screenshots
 
