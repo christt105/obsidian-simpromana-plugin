@@ -1,10 +1,11 @@
 import type { NoteGraph, NoteRecord, NoteRelation, RelationKind, UnresolvedRelation } from "./model";
-import { relationKeyOf, toTargetList } from "./relations";
+import { RelationKeys, toTargetList } from "./relations";
 
 export type LinkResolver = (target: string, sourcePath: string) => string | null;
 
 export interface BuildOptions {
 	mentions: boolean;
+	relationKeys?: RelationKeys;
 }
 
 export interface Subgraph extends NoteGraph {
@@ -41,10 +42,11 @@ export function buildNoteGraph(
 	const relations = new Map<string, NoteRelation>();
 	const pairs = new Set<string>();
 	const unresolved: UnresolvedRelation[] = [];
+	const relationKeys = options.relationKeys ?? new RelationKeys();
 
 	for (const record of records) {
 		for (const [key, value] of Object.entries(record.frontmatter)) {
-			const relationKey = relationKeyOf(key);
+			const relationKey = relationKeys.keyOf(key);
 			if (!relationKey) continue;
 
 			for (const target of toTargetList(value)) {

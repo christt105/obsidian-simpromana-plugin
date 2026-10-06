@@ -2,7 +2,8 @@ import { ItemView, Keymap, Notice, TFile, ViewStateResult, WorkspaceLeaf, deboun
 import type { SimpromanaSettings } from "../settings";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes, projectFiles } from "../lib/notes";
-import { relationKeyOf, toTargetList } from "../graph/relations";
+import { toTargetList } from "../graph/relations";
+import { relationKeys } from "../lib/relations";
 import { projectsPath, tasksPath } from "../lib/vault";
 
 export const BOARD_VIEW_TYPE = "simpromana-board";
@@ -138,9 +139,10 @@ export class BoardView extends ItemView {
 			}
 		};
 
+		const keys = relationKeys(this.settings);
 		for (const record of this.records) {
 			for (const [key, value] of Object.entries(record.frontmatter)) {
-				const relationKey = relationKeyOf(key);
+				const relationKey = keys.keyOf(key);
 				if (!relationKey || relationKey.kind !== "dependency") continue;
 
 				for (const target of toTargetList(value)) {
@@ -243,7 +245,7 @@ export class BoardView extends ItemView {
 	}
 
 	private dueDateState(record: NoteRecord): { label: string; urgency: "overdue" | "soon" | "normal" } | null {
-		const raw = record.frontmatter.due_date;
+		const raw = record.frontmatter[this.settings.dueDateProperty];
 		if (typeof raw !== "string" || !raw.trim()) return null;
 
 		const due = new Date(`${raw.trim()}T00:00:00`);
@@ -291,7 +293,7 @@ export class BoardView extends ItemView {
 
 		try {
 			await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-				frontmatter.tstatus = column;
+				frontmatter[this.settings.taskStatusProperty] = column;
 			});
 			if (record) record.status = column;
 			this.renderBoard();

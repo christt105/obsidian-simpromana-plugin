@@ -148,21 +148,22 @@ export class CreateTaskModal extends Modal {
 		const folder = tasksPath(this.settings);
 		const filePath = normalizePath(`${folder}/${fileName}`);
 
+		const p = this.settings;
 		const projectLine = this.selectedProject
-			? `project: ${projectWikilink(this.settings, this.selectedProject.basename)}`
-			: "project:";
+			? `${p.projectProperty}: ${projectWikilink(this.settings, this.selectedProject.basename)}`
+			: `${p.projectProperty}:`;
 
 		const milestoneLine = this.milestone.trim()
-			? `milestone: "${this.milestone.trim()}"`
+			? `${p.milestoneProperty}: "${this.milestone.trim()}"`
 			: "";
 
-		const epicLine = this.epic.trim() ? `epic: "${this.epic.trim()}"` : "";
-		const dueDateLine = this.dueDate.trim() ? `due_date: "${this.dueDate.trim()}"` : "";
+		const epicLine = this.epic.trim() ? `${p.epicProperty}: "${this.epic.trim()}"` : "";
+		const dueDateLine = this.dueDate.trim() ? `${p.dueDateProperty}: "${this.dueDate.trim()}"` : "";
 
 		const frontmatterLines = [
-			`tstatus: ${this.tstatus}`,
-			"type: task",
-			`priority: ${this.priority}`,
+			`${p.taskStatusProperty}: ${this.tstatus}`,
+			`${p.typeProperty}: task`,
+			`${p.priorityProperty}: ${this.priority}`,
 			milestoneLine,
 			epicLine,
 			dueDateLine,

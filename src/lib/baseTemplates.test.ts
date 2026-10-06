@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import type { SimpromanaSettings } from "../settings";
+import { DEFAULT_SETTINGS, type SimpromanaSettings } from "../defaults";
 import { referencesBaseContent, tasksBaseContent } from "./baseTemplates";
 
 interface BaseView {
@@ -17,11 +17,10 @@ interface BaseFile {
 }
 
 const settings: SimpromanaSettings = {
+	...DEFAULT_SETTINGS,
 	rootFolder: "Atlas/PM",
-	projectsFolder: "Projects",
 	tasksFolder: "Todo",
 	referencesFolder: "Refs",
-	archiveFolder: "Archive",
 };
 
 function view(base: BaseFile, name: string): BaseView {
@@ -64,5 +63,24 @@ describe("referencesBaseContent", () => {
 
 	it("groups the All view by project", () => {
 		expect(view(base, "All").groupBy?.property).toBe("project");
+	});
+});
+
+describe("templates with renamed properties", () => {
+	const renamed: SimpromanaSettings = {
+		...settings,
+		taskStatusProperty: "status",
+		projectProperty: "parent",
+	};
+
+	it("groups the task kanban views by the configured status property", () => {
+		const base = parse(tasksBaseContent(renamed)) as BaseFile;
+		expect(view(base, "Current").groupBy?.property).toBe("status");
+		expect(view(base, "Table").groupBy?.property).toBe("parent");
+	});
+
+	it("scopes references with the configured project property", () => {
+		const base = parse(referencesBaseContent(renamed)) as BaseFile;
+		expect(view(base, "Current").filters?.and).toEqual(["note.parent == this"]);
 	});
 });

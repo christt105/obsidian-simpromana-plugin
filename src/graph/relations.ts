@@ -21,19 +21,44 @@ const RELATION_KEY_LIST: RelationKey[] = [
 	{ kind: "related", inverted: false, literal: "related_to" },
 ];
 
-const RELATION_KEYS: Record<string, RelationKey> = Object.fromEntries(
-	RELATION_KEY_LIST.map((entry) => [normalizeKey(entry.literal), entry])
-);
+/** The keys the plugin writes for each relation kind; also recognized when reading. */
+export type CanonicalRelationKeys = Record<Exclude<RelationKind, "mention">, string>;
 
-/** Frontmatter keys the plugin renders as a task searcher instead of plain text. */
-export const RELATION_PROPERTY_KEYS = RELATION_KEY_LIST.map((entry) => entry.literal);
-
-export const CANONICAL_RELATION_KEYS: Record<RelationKind, string> = {
+export const DEFAULT_CANONICAL_RELATION_KEYS: CanonicalRelationKeys = {
 	dependency: "blocked_by",
 	continuation: "continues",
 	related: "related",
-	mention: "",
 };
+
+/** Maps frontmatter keys to relation kinds: the built-in aliases plus the configured canonical keys. */
+export class RelationKeys {
+	private readonly byKey: Record<string, RelationKey>;
+
+	constructor(private readonly canonical: CanonicalRelationKeys = DEFAULT_CANONICAL_RELATION_KEYS) {
+		const configured: RelationKey[] = [
+			{ kind: "dependency", inverted: true, literal: canonical.dependency },
+			{ kind: "continuation", inverted: true, literal: canonical.continuation },
+			{ kind: "related", inverted: false, literal: canonical.related },
+		];
+		this.byKey = Object.fromEntries(
+			[...RELATION_KEY_LIST, ...configured].map((entry) => [normalizeKey(entry.literal), entry])
+		);
+	}
+
+	keyOf(key: string): RelationKey | null {
+		return this.byKey[normalizeKey(key)] ?? null;
+	}
+
+	/** The key new relations of `kind` are written under. */
+	canonicalKey(kind: RelationKind): string {
+		return kind === "mention" ? "" : this.canonical[kind];
+	}
+
+	/** Frontmatter keys the plugin renders as a task searcher instead of plain text. */
+	propertyKeys(): string[] {
+		return [...new Set(Object.values(this.byKey).map((entry) => entry.literal))];
+	}
+}
 
 export const RELATION_LABELS: Record<RelationKind, string> = {
 	dependency: "Blocks",
@@ -44,10 +69,6 @@ export const RELATION_LABELS: Record<RelationKind, string> = {
 
 function normalizeKey(key: string): string {
 	return key.toLowerCase().replace(/[\s_-]/g, "");
-}
-
-export function relationKeyOf(key: string): RelationKey | null {
-	return RELATION_KEYS[normalizeKey(key)] ?? null;
 }
 
 export function parseLinkTarget(raw: unknown): string | null {

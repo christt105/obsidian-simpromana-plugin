@@ -1,7 +1,8 @@
 import { App, TFile } from "obsidian";
 import type { NoteRecord, RelationKind } from "../graph/model";
 import type { RelationDraft } from "../graph/validate";
-import { CANONICAL_RELATION_KEYS, parseLinkTarget, relationKeyOf } from "../graph/relations";
+import { RelationKeys, parseLinkTarget } from "../graph/relations";
+import type { SimpromanaSettings } from "../settings";
 
 /** The note whose frontmatter declares the relation, and the note it points at. */
 function declaration(draft: RelationDraft): { owner: NoteRecord; target: NoteRecord } {
@@ -10,11 +11,19 @@ function declaration(draft: RelationDraft): { owner: NoteRecord; target: NoteRec
 		: { owner: draft.to, target: draft.from };
 }
 
+export function relationKeys(s: SimpromanaSettings): RelationKeys {
+	return new RelationKeys({
+		dependency: s.blockedByProperty,
+		continuation: s.continuesProperty,
+		related: s.relatedProperty,
+	});
+}
+
 export function wikilink(file: TFile): string {
 	return `[[${file.path.replace(/\.md$/, "")}]]`;
 }
 
-export async function writeRelation(app: App, draft: RelationDraft): Promise<void> {
+export async function writeRelation(app: App, keys: RelationKeys, draft: RelationDraft): Promise<void> {
 	const { owner, target } = declaration(draft);
 	const file = app.vault.getAbstractFileByPath(owner.path);
 	const targetFile = app.vault.getAbstractFileByPath(target.path);
@@ -22,7 +31,7 @@ export async function writeRelation(app: App, draft: RelationDraft): Promise<voi
 		throw new Error("Task file not found.");
 	}
 
-	const key = CANONICAL_RELATION_KEYS[draft.kind];
+	const key = keys.canonicalKey(draft.kind);
 	const link = wikilink(targetFile);
 
 	await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
@@ -44,6 +53,7 @@ export async function writeRelation(app: App, draft: RelationDraft): Promise<voi
  */
 async function stripRelationFromNote(
 	app: App,
+	keys: RelationKeys,
 	note: NoteRecord,
 	other: NoteRecord,
 	kind: RelationKind
@@ -53,7 +63,7 @@ async function stripRelationFromNote(
 
 	await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 		for (const key of Object.keys(frontmatter)) {
-			const relationKey = relationKeyOf(key);
+			const relationKey = keys.keyOf(key);
 			if (!relationKey || relationKey.kind !== kind) continue;
 
 			const current = frontmatter[key];
@@ -73,21 +83,23 @@ async function stripRelationFromNote(
 /** Clears the relation from whichever side(s) declared it. */
 export async function deleteRelation(
 	app: App,
+	keys: RelationKeys,
 	from: NoteRecord,
 	to: NoteRecord,
 	kind: RelationKind
 ): Promise<void> {
-	await stripRelationFromNote(app, from, to, kind);
-	await stripRelationFromNote(app, to, from, kind);
+	await stripRelationFromNote(app, keys, from, to, kind);
+	await stripRelationFromNote(app, keys, to, from, kind);
 }
 
 export async function changeRelationKind(
 	app: App,
+	keys: RelationKeys,
 	from: NoteRecord,
 	to: NoteRecord,
 	fromKind: RelationKind,
 	toKind: RelationKind
 ): Promise<void> {
-	await deleteRelation(app, from, to, fromKind);
-	await writeRelation(app, { from, to, kind: toKind });
+	await deleteRelation(app, keys, from, to, fromKind);
+	await writeRelation(app, keys, { from, to, kind: toKind });
 }

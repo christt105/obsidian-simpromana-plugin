@@ -1,7 +1,7 @@
 import { App, PropertyRenderContext, PropertyWidget, PropertyWidgetComponentBase, TFile, setIcon } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
-import { RELATION_PROPERTY_KEYS, parseLinkTarget } from "../graph/relations";
-import { wikilink } from "./relations";
+import { parseLinkTarget } from "../graph/relations";
+import { relationKeys, wikilink } from "./relations";
 import { collectNotes } from "./notes";
 import { TaskSearchModal } from "../modals/TaskSearchModal";
 
@@ -34,7 +34,7 @@ function relationCandidates(
 	if (!(sourceFile instanceof TFile)) return [];
 
 	const frontmatter = app.metadataCache.getFileCache(sourceFile)?.frontmatter;
-	const projectTarget = parseLinkTarget(frontmatter?.project);
+	const projectTarget = parseLinkTarget(frontmatter?.[settings.projectProperty]);
 	const projectFile = projectTarget
 		? app.metadataCache.getFirstLinkpathDest(projectTarget, sourcePath)
 		: null;
@@ -141,7 +141,7 @@ export function registerRelationPropertyWidget(app: App, settings: SimpromanaSet
 
 	app.metadataTypeManager.registeredTypeWidgets[RELATION_WIDGET_TYPE] = widget;
 
-	for (const key of RELATION_PROPERTY_KEYS) {
+	for (const key of relationKeys(settings).propertyKeys()) {
 		if (app.metadataTypeManager.getAssignedWidget(key) !== RELATION_WIDGET_TYPE) {
 			void app.metadataTypeManager.setType(key, RELATION_WIDGET_TYPE);
 		}
