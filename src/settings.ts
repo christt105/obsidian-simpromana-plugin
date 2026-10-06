@@ -45,6 +45,27 @@ export class SimpromanaSettingTab extends PluginSettingTab {
 					control: { type: "text", key, placeholder: DEFAULT_SETTINGS[key] },
 				})),
 			},
+			{
+				type: "group",
+				heading: "Status values",
+				items: [
+					{
+						name: "Task statuses",
+						desc: "Comma-separated, in board column order. The first is used for new tasks, the last counts as done.",
+						control: { type: "text", key: "taskStatuses", placeholder: DEFAULT_SETTINGS.taskStatuses },
+					},
+					{
+						name: "Archived task status",
+						desc: "Set by the Archive current task command.",
+						control: { type: "text", key: "archivedStatus", placeholder: DEFAULT_SETTINGS.archivedStatus },
+					},
+					{
+						name: "Project statuses",
+						desc: "Comma-separated. The first is used for new projects.",
+						control: { type: "text", key: "projectStatuses", placeholder: DEFAULT_SETTINGS.projectStatuses },
+					},
+				],
+			},
 		];
 	}
 
@@ -56,7 +77,7 @@ export class SimpromanaSettingTab extends PluginSettingTab {
 		if (typeof value !== "string") return;
 		const trimmed = value.trim();
 		this.plugin.settings[key as SettingKey] =
-			trimmed || (key.endsWith("Property") ? DEFAULT_SETTINGS[key as SettingKey] : trimmed);
+			trimmed || (key.endsWith("Folder") ? trimmed : DEFAULT_SETTINGS[key as SettingKey]);
 		await this.plugin.saveSettings();
 	}
 }

@@ -60,6 +60,8 @@ export interface LayoutOptions {
 	dummyHeight: number;
 	headerHeight: number;
 	grouping: GroupingMode;
+	/** Task statuses in display order, for status grouping. */
+	statusOrder: string[];
 }
 
 export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
@@ -71,6 +73,7 @@ export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
 	dummyHeight: 14,
 	headerHeight: 34,
 	grouping: "status",
+	statusOrder: ["Todo", "Doing", "Review", "Done"],
 };
 
 interface Cell {
@@ -625,7 +628,7 @@ export function layoutGraph(graph: NoteGraph, options: LayoutOptions = DEFAULT_L
 
 		const columns = Math.max(4, maxLayers);
 		const gridWidth = columns * step - options.layerGap;
-		const grouper = grouperFor(options.grouping);
+		const grouper = grouperFor(options.grouping, options.statusOrder);
 		const buckets = new Map<string, { group: NodeGroup; records: NoteRecord[] }>();
 
 		for (const path of unlinked) {

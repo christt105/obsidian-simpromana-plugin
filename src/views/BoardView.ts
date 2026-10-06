@@ -1,5 +1,6 @@
 import { ItemView, Keymap, Notice, TFile, ViewStateResult, WorkspaceLeaf, debounce } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
+import { taskStatusList } from "../defaults";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes, projectFiles } from "../lib/notes";
 import { toTargetList } from "../graph/relations";
@@ -8,8 +9,6 @@ import { projectsPath, tasksPath } from "../lib/vault";
 
 export const BOARD_VIEW_TYPE = "simpromana-board";
 
-const COLUMNS = ["Todo", "Doing", "Review", "Done"] as const;
-type Column = (typeof COLUMNS)[number];
 
 export interface BoardViewState extends Record<string, unknown> {
 	projectPath?: string;
@@ -168,7 +167,7 @@ export class BoardView extends ItemView {
 			? this.records.filter((record) => record.projectPath === this.projectPath)
 			: this.records;
 
-		for (const column of COLUMNS) {
+		for (const column of taskStatusList(this.settings)) {
 			this.columnsEl.appendChild(this.renderColumn(column, filtered));
 		}
 
@@ -176,7 +175,7 @@ export class BoardView extends ItemView {
 		if (filtered.length === 0) this.emptyEl.setText("No tasks found.");
 	}
 
-	private renderColumn(column: Column, filtered: NoteRecord[]): HTMLElement {
+	private renderColumn(column: string, filtered: NoteRecord[]): HTMLElement {
 		const cards = filtered.filter((record) => record.status.toLowerCase() === column.toLowerCase());
 
 		const columnEl = createDiv({ cls: "spm-board-column" });
@@ -284,7 +283,7 @@ export class BoardView extends ItemView {
 		}
 	}
 
-	private async moveTask(path: string, column: Column): Promise<void> {
+	private async moveTask(path: string, column: string): Promise<void> {
 		const record = this.records.find((entry) => entry.path === path);
 		if (record && record.status.toLowerCase() === column.toLowerCase()) return;
 

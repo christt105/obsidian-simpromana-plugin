@@ -1,5 +1,6 @@
 import { App, Modal, Notice, Setting, TFile, normalizePath } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
+import { taskStatusList } from "../defaults";
 import {
 	activeProjectFile,
 	ensureFolder,
@@ -8,13 +9,6 @@ import {
 	projectWikilink,
 	tasksPath,
 } from "../lib/vault";
-
-const TSTATUS_OPTIONS: Record<string, string> = {
-	Todo: "Todo",
-	Doing: "Doing",
-	Review: "Review",
-	Done: "Done",
-};
 
 const PRIORITY_OPTIONS: Record<string, string> = {
 	high: "High",
@@ -26,7 +20,7 @@ const NO_PROJECT = "__none__";
 
 export class CreateTaskModal extends Modal {
 	private taskName = "";
-	private tstatus = "Todo";
+	private tstatus = "";
 	private priority = "medium";
 	private milestone = "";
 	private epic = "";
@@ -37,6 +31,7 @@ export class CreateTaskModal extends Modal {
 
 	constructor(app: App, private settings: SimpromanaSettings, private presetProject: TFile | null = null) {
 		super(app);
+		this.tstatus = taskStatusList(settings)[0];
 	}
 
 	async onOpen(): Promise<void> {
@@ -61,7 +56,7 @@ export class CreateTaskModal extends Modal {
 
 		new Setting(contentEl).setName("Status").addDropdown((dd) =>
 			dd
-				.addOptions(TSTATUS_OPTIONS)
+				.addOptions(Object.fromEntries(taskStatusList(this.settings).map((status) => [status, status])))
 				.setValue(this.tstatus)
 				.onChange((v) => (this.tstatus = v))
 		);

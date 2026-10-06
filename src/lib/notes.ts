@@ -1,5 +1,6 @@
 import { App, TFile } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
+import { taskStatusList } from "../defaults";
 import type { NoteKind, NoteRecord } from "../graph/model";
 import type { LinkResolver } from "../graph/build";
 import { parseLinkTarget } from "../graph/relations";
@@ -37,7 +38,7 @@ function readNote(app: App, settings: SimpromanaSettings, file: TFile, kind: Not
 		id,
 		projectPath: projectFile?.path ?? null,
 		projectName: projectFile?.basename ?? projectTarget?.split("/").pop() ?? null,
-		status: kind === "task" ? stringValue(frontmatter[settings.taskStatusProperty]) || "Todo" : "",
+		status: kind === "task" ? stringValue(frontmatter[settings.taskStatusProperty]) || taskStatusList(settings)[0] : "",
 		priority: stringValue(frontmatter[settings.priorityProperty]),
 		milestone: stringValue(frontmatter[settings.milestoneProperty]) || null,
 		epic: stringValue(frontmatter[settings.epicProperty]) || null,

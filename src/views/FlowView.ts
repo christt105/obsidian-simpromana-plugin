@@ -10,6 +10,7 @@ import {
 	setIcon,
 } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
+import { doneStatus, taskStatusList } from "../defaults";
 import type { NoteGraph, NoteRecord, NoteRelation, RelationKind } from "../graph/model";
 import {
 	buildNoteGraph,
@@ -350,7 +351,8 @@ export class FlowView extends ItemView {
 		}
 
 		if (this.hideDone) {
-			scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === "done");
+			const done = doneStatus(this.settings).toLowerCase();
+			scoped = dropNodes(scoped, (record) => record.status.toLowerCase() === done);
 		}
 
 		const hidden = new Set(this.hidden);
@@ -396,6 +398,7 @@ export class FlowView extends ItemView {
 			layerGap: preferences.layerGap,
 			rowGap: preferences.rowGap,
 			grouping: preferences.grouping,
+			statusOrder: taskStatusList(this.settings),
 		};
 		const forceOptions: ForceOptions = {
 			...DEFAULT_FORCE_OPTIONS,
@@ -410,6 +413,7 @@ export class FlowView extends ItemView {
 			mode: this.mode,
 			relations: scoped.relations,
 			force: forceOptions,
+			statusOrder: layoutOptions.statusOrder,
 		});
 		this.updateEmptyState(projects.length, scoped.nodes.length, unlinkedCount);
 	}

@@ -69,9 +69,8 @@ around how I personally organize my own vault.
 - **`reference`** (`Reference/Title - abc123.md`): write-ups and audits,
   created via *New reference*, also linked back to a `project`.
 
-Frontmatter property names are configurable (see Settings). The status
-vocabulary (`Todo`/`Doing`/`Review`/`Done`) and the `type` values
-(`project`/`task`/`reference`) are fixed.
+Frontmatter property names and status values are configurable (see
+Settings). The `type` values (`project`/`task`/`reference`) are fixed.
 
 ## Settings
 
@@ -87,6 +86,10 @@ Under Settings → Simpromana:
   `related_to`, …) keep working. Renaming a property doesn't touch
   existing notes; rename it in them yourself, and re-run *Setup bases*
   after deleting the old `.base` files.
+- The status values: task statuses in board column order (default
+  `Todo, Doing, Review, Done`; the first is used for new tasks and the
+  last counts as done), the status the *Archive current task* command
+  sets (`Archive`), and the project statuses offered by *New project*.
 
 ## Privacy
 
@@ -94,10 +97,6 @@ Simpromana lists the notes in your vault to find projects, tasks, and
 references by their `type` frontmatter, and edits their frontmatter
 when you change a status or a relation. It makes no network requests;
 nothing leaves your vault.
-
-## Known limitations
-
-- The status vocabulary is hardcoded across the plugin.
 
 ## Screenshots
 

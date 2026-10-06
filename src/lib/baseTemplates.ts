@@ -1,4 +1,4 @@
-import type { SimpromanaSettings } from "../settings";
+import { taskStatusList, type SimpromanaSettings } from "../defaults";
 
 export function tasksBaseContent(s: SimpromanaSettings): string {
 	const tasksFolder = `${s.rootFolder}/${s.tasksFolder}`;
@@ -6,13 +6,19 @@ export function tasksBaseContent(s: SimpromanaSettings): string {
 	const project = s.projectProperty;
 	const priority = s.priorityProperty;
 	const milestone = s.milestoneProperty;
+	const statuses = taskStatusList(s);
+	const statusOrder = statuses.reduceRight(
+		(rest, value, index) => `if(${status} == ${JSON.stringify(value)}, ${index + 1}, ${rest})`,
+		String(statuses.length + 1)
+	);
+	const boardColumns = statuses.map((value) => `      - ${JSON.stringify(value)}`).join("\n");
 	return `filters:
   and:
     - file.folder == "${tasksFolder}"
 formulas:
   taskName: file.name.slice(0, file.name.length - 9)
   taskNameLink: link(file.path, formula.taskName)
-  _status_order: if(${status} == "Todo", 1, if(${status} == "Doing", 2, if(${status} == "Review", 3, 4)))
+  _status_order: ${statusOrder}
   project_link: link(${project}, ${project}.split('/')[-1])
 properties:
   file.name:
@@ -27,10 +33,7 @@ views:
       property: ${status}
       direction: ASC
     boardColumns:
-      - Todo
-      - Doing
-      - Review
-      - Done
+${boardColumns}
     order:
       - ${priority}
       - ${milestone}
@@ -43,10 +46,7 @@ views:
       property: ${status}
       direction: ASC
     boardColumns:
-      - Todo
-      - Doing
-      - Review
-      - Done
+${boardColumns}
     order:
       - formula.project_link
       - ${priority}

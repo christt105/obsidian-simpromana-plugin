@@ -1,6 +1,7 @@
 import { setTooltip } from "obsidian";
 import type { GraphLayout, LayoutEdge, LayoutEpic, LayoutGroup, LayoutNode } from "../graph/layout";
-import { EPIC_PADDING } from "../graph/layout";
+import { DEFAULT_LAYOUT_OPTIONS, EPIC_PADDING } from "../graph/layout";
+import { statusStage } from "../graph/grouping";
 import type { NoteRelation } from "../graph/model";
 import { DEFAULT_FORCE_OPTIONS, ForceSimulation } from "../graph/force";
 import type { ForceNode, ForceOptions } from "../graph/force";
@@ -83,9 +84,6 @@ function edgePath(edge: LayoutEdge): string {
 	return path;
 }
 
-function statusSlug(status: string): string {
-	return status.toLowerCase().replace(/\s+/g, "-");
-}
 
 export class FlowCanvas {
 	private svg: SVGSVGElement;
@@ -105,6 +103,7 @@ export class FlowCanvas {
 	private pendingFit = false;
 	private observer: ResizeObserver;
 	private mode: CanvasMode = "flow";
+	private statusOrder: string[] = DEFAULT_LAYOUT_OPTIONS.statusOrder;
 	private simulation: ForceSimulation | null = null;
 	private simulationFrame = 0;
 	private forceOptions: ForceOptions = DEFAULT_FORCE_OPTIONS;
@@ -159,10 +158,17 @@ export class FlowCanvas {
 
 	render(
 		layout: GraphLayout,
-		options: { fit: boolean; mode: CanvasMode; relations: NoteRelation[]; force?: ForceOptions }
+		options: {
+			fit: boolean;
+			mode: CanvasMode;
+			relations: NoteRelation[];
+			force?: ForceOptions;
+			statusOrder?: string[];
+		}
 	): void {
 		this.layout = layout;
 		this.mode = options.mode;
+		this.statusOrder = options.statusOrder ?? DEFAULT_LAYOUT_OPTIONS.statusOrder;
 		this.forceOptions = options.force ?? DEFAULT_FORCE_OPTIONS;
 		this.edgeLayer.empty();
 		this.edgeElements = [];
@@ -628,7 +634,7 @@ export class FlowCanvas {
 		});
 
 		const card = createDiv({ cls: "spm-flow-card" });
-		card.dataset.status = statusSlug(record.status);
+		card.dataset.status = statusStage(this.statusOrder, record.status);
 		card.dataset.kind = record.kind;
 		if (node.unlinked) card.addClass("is-unlinked");
 		if (record.external) card.addClass("is-external");
