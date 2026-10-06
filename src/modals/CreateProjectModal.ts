@@ -1,15 +1,7 @@
 import { App, Modal, Notice, Setting, normalizePath } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
+import { projectStatusList } from "../defaults";
 import { ensureFolder, projectsPath } from "../lib/vault";
-
-const PSTATUS_OPTIONS: Record<string, string> = {
-	Backlog: "Backlog",
-	Planning: "Planning",
-	"In progress": "In progress",
-	Paused: "Paused",
-	Done: "Done",
-	Canceled: "Canceled",
-};
 
 const PRIORITY_OPTIONS: Record<string, string> = {
 	high: "High",
@@ -19,13 +11,14 @@ const PRIORITY_OPTIONS: Record<string, string> = {
 
 export class CreateProjectModal extends Modal {
 	private name = "";
-	private pstatus = "Backlog";
+	private pstatus = "";
 	private priority = "medium";
 	private tags = "";
 	private github = "";
 
 	constructor(app: App, private settings: SimpromanaSettings) {
 		super(app);
+		this.pstatus = projectStatusList(settings)[0];
 	}
 
 	onOpen(): void {
@@ -42,7 +35,7 @@ export class CreateProjectModal extends Modal {
 
 		new Setting(contentEl).setName("Status").addDropdown((dd) =>
 			dd
-				.addOptions(PSTATUS_OPTIONS)
+				.addOptions(Object.fromEntries(projectStatusList(this.settings).map((status) => [status, status])))
 				.setValue(this.pstatus)
 				.onChange((v) => (this.pstatus = v))
 		);

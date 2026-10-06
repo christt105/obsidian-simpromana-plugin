@@ -15,31 +15,30 @@ export const GROUPING_LABELS: Record<GroupingMode, string> = {
 	none: "Nothing",
 };
 
-const STATUS_ORDER = ["todo", "doing", "review", "done"];
 const PRIORITY_ORDER = ["high", "medium", "low"];
 
 function rankOf(order: string[], value: string): number {
-	const index = order.indexOf(value.toLowerCase());
+	const index = order.findIndex((entry) => entry.toLowerCase() === value.toLowerCase());
 	return index === -1 ? order.length : index;
 }
 
 const REFERENCE_GROUP: NodeGroup = { key: "reference", label: "Reference notes", rank: 99 };
 
-export function grouperFor(mode: GroupingMode): (record: NoteRecord) => NodeGroup {
+export function grouperFor(mode: GroupingMode, statusOrder: string[]): (record: NoteRecord) => NodeGroup {
 	if (mode !== "none") {
-		const inner = grouperByField(mode);
+		const inner = grouperByField(mode, statusOrder);
 		return (record) => (record.kind === "reference" ? REFERENCE_GROUP : inner(record));
 	}
 
 	return () => ({ key: "", label: "", rank: 0 });
 }
 
-function grouperByField(mode: GroupingMode): (record: NoteRecord) => NodeGroup {
+function grouperByField(mode: GroupingMode, statusOrder: string[]): (record: NoteRecord) => NodeGroup {
 	if (mode === "status") {
 		return (record) => ({
 			key: record.status || "—",
 			label: record.status || "No status",
-			rank: rankOf(STATUS_ORDER, record.status),
+			rank: rankOf(statusOrder, record.status),
 		});
 	}
 
@@ -60,6 +59,20 @@ function grouperByField(mode: GroupingMode): (record: NoteRecord) => NodeGroup {
 	}
 
 	return () => ({ key: "", label: "", rank: 0 });
+}
+
+/**
+ * Maps a status to the stage the default vocabulary styles it as, by its
+ * position in `statusOrder`: first is todo, last is done, the one before
+ * last is review when there are four or more, anything else is doing.
+ */
+export function statusStage(statusOrder: string[], status: string): string {
+	const index = statusOrder.findIndex((entry) => entry.toLowerCase() === status.toLowerCase());
+	if (index === -1) return status.toLowerCase().replace(/\s+/g, "-");
+	if (index === 0) return "todo";
+	if (index === statusOrder.length - 1) return "done";
+	if (statusOrder.length >= 4 && index === statusOrder.length - 2) return "review";
+	return "doing";
 }
 
 export function compareGroups(a: NodeGroup, b: NodeGroup): number {

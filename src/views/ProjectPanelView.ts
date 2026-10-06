@@ -1,5 +1,6 @@
 import { ItemView, Keymap, TFile, WorkspaceLeaf, debounce } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
+import { taskStatusList } from "../defaults";
 import type { NoteRecord } from "../graph/model";
 import { collectNotes } from "../lib/notes";
 import { activeProjectFile, projectsPath, referencesPath, tasksPath } from "../lib/vault";
@@ -7,11 +8,16 @@ import { CreateTaskModal } from "../modals/CreateTaskModal";
 
 export const PROJECT_PANEL_VIEW_TYPE = "simpromana-project-panel";
 
-const STATUS_ORDER = ["Doing", "Review", "Todo", "Done", "Archive", "Archived"];
+/** In-progress statuses first, then not started, done, and archived. */
+function panelStatusOrder(s: SimpromanaSettings): string[] {
+	const statuses = taskStatusList(s);
+	if (statuses.length < 2) return [...statuses, s.archivedStatus];
+	return [...statuses.slice(1, -1), statuses[0], statuses[statuses.length - 1], s.archivedStatus];
+}
 
-function statusRank(status: string): number {
-	const index = STATUS_ORDER.indexOf(status);
-	return index === -1 ? STATUS_ORDER.length : index;
+function statusRank(order: string[], status: string): number {
+	const index = order.indexOf(status);
+	return index === -1 ? order.length : index;
 }
 
 export class ProjectPanelView extends ItemView {
@@ -111,10 +117,12 @@ export class ProjectPanelView extends ItemView {
 	}
 
 	private renderProgress(tasks: NoteRecord[]): void {
-		const counted = tasks.filter((task) => task.status !== "Archive" && task.status !== "Archived");
+		const statuses = taskStatusList(this.settings);
+		const doneValue = statuses[statuses.length - 1];
+		const counted = tasks.filter((task) => task.status !== this.settings.archivedStatus);
 		if (counted.length === 0) return;
 
-		const done = counted.filter((task) => task.status === "Done").length;
+		const done = counted.filter((task) => task.status === doneValue).length;
 		const percent = Math.round((done / counted.length) * 100);
 
 		const wrap = this.bodyEl.createDiv({ cls: "spm-panel-progress" });
@@ -151,14 +159,15 @@ export class ProjectPanelView extends ItemView {
 	private renderTaskGroups(tasks: NoteRecord[]): void {
 		const groups = new Map<string, NoteRecord[]>();
 		for (const task of tasks) {
-			const key = task.status || "Todo";
+			const key = task.status || taskStatusList(this.settings)[0];
 			const bucket = groups.get(key) ?? [];
 			bucket.push(task);
 			groups.set(key, bucket);
 		}
 
+		const order = panelStatusOrder(this.settings);
 		const orderedKeys = [...groups.keys()].sort((a, b) => {
-			const rank = statusRank(a) - statusRank(b);
+			const rank = statusRank(order, a) - statusRank(order, b);
 			return rank !== 0 ? rank : a.localeCompare(b);
 		});
 

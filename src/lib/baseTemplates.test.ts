@@ -84,3 +84,19 @@ describe("templates with renamed properties", () => {
 		expect(view(base, "Current").filters?.and).toEqual(["note.parent == this"]);
 	});
 });
+
+describe("templates with a custom status vocabulary", () => {
+	const custom: SimpromanaSettings = { ...settings, taskStatuses: "Pendiente, En curso, Hecho" };
+
+	it("uses the configured statuses as board columns", () => {
+		const base = parse(tasksBaseContent(custom)) as BaseFile;
+		expect(view(base, "Current").boardColumns).toEqual(["Pendiente", "En curso", "Hecho"]);
+	});
+
+	it("orders the table by the configured statuses", () => {
+		const base = parse(tasksBaseContent(custom)) as { formulas: Record<string, string> };
+		expect(base.formulas._status_order).toBe(
+			'if(tstatus == "Pendiente", 1, if(tstatus == "En curso", 2, if(tstatus == "Hecho", 3, 4)))'
+		);
+	});
+});

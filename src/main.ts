@@ -108,7 +108,7 @@ export default class SimpromanaPlugin extends Plugin {
 		const modal = new ConfirmationModal(this.app);
 		modal.setTitle("Archive task");
 		modal.setContent(
-			`Set "${file.basename}" to ${this.settings.taskStatusProperty}: Archive and move it into "${this.settings.archiveFolder}"?`
+			`Set "${file.basename}" to ${this.settings.taskStatusProperty}: ${this.settings.archivedStatus} and move it into "${this.settings.archiveFolder}"?`
 		);
 		modal.addButton((btn) =>
 			btn
@@ -124,7 +124,7 @@ export default class SimpromanaPlugin extends Plugin {
 	private async archiveTask(file: TFile): Promise<void> {
 		try {
 			await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-				frontmatter[this.settings.taskStatusProperty] = "Archive";
+				frontmatter[this.settings.taskStatusProperty] = this.settings.archivedStatus;
 			});
 			const folder = archivePath(this.settings);
 			await ensureFolder(this.app, folder);
