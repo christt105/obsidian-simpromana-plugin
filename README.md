@@ -45,7 +45,7 @@ interest.
 
 ## Requirements
 
-- Obsidian 1.4.0+.
+- Obsidian 1.13.0+.
 - The core **Bases** plugin, if you want the `Tasks.base` /
   `References.base` views embedded in project notes.
 - Recommended: the community plugin **[Base Board](https://community.obsidian.md/plugins/base-board)**,
