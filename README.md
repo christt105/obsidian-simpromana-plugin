@@ -18,7 +18,8 @@ kanban board, a project side panel, and commands to keep `Projects`,
   current task*, each scaffolding the right frontmatter.
 - Works alongside the core **Bases** plugin: project notes embed
   `Tasks.base` and `References.base` views for their own tasks and
-  references.
+  references. The *Setup bases* command creates whichever of the two
+  is missing in the root folder; existing files are never overwritten.
 
 ## Installation
 
