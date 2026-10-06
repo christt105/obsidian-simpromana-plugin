@@ -24,6 +24,9 @@ kanban board, a project side panel, and commands to keep `Projects`,
 
 **Community plugins (recommended)**
 
+Open the [Simpromana page](https://community.obsidian.md/plugins/simpromana)
+on the Obsidian community site and install it from there, or:
+
 1. Open Settings → Community plugins → Browse.
 2. Search for *Simpromana*, install it, and enable it.
 
