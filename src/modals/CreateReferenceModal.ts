@@ -61,10 +61,8 @@ export class CreateReferenceModal extends Modal {
 				dd.addOptions(projectOptions)
 					.setValue(NO_PROJECT)
 					.onChange((v) => {
-						this.selectedProject =
-							v === NO_PROJECT
-								? null
-								: (this.app.vault.getAbstractFileByPath(v) as TFile);
+						const file = v === NO_PROJECT ? null : this.app.vault.getAbstractFileByPath(v);
+						this.selectedProject = file instanceof TFile ? file : null;
 					});
 			});
 		}
@@ -100,11 +98,11 @@ export class CreateReferenceModal extends Modal {
 
 		contentEl.addEventListener("keydown", (e) => {
 			if (e.key === "Enter" && !e.shiftKey && !(e.target instanceof HTMLTextAreaElement)) {
-				this.submit();
+				void this.submit();
 			}
 		});
 
-		setTimeout(() => titleInput?.focus(), 50);
+		window.setTimeout(() => titleInput?.focus(), 50);
 	}
 
 	onClose(): void {

@@ -25,9 +25,9 @@ export async function writeRelation(app: App, draft: RelationDraft): Promise<voi
 	const key = CANONICAL_RELATION_KEYS[draft.kind];
 	const link = wikilink(targetFile);
 
-	await app.fileManager.processFrontMatter(file, (frontmatter) => {
+	await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 		const current = frontmatter[key];
-		const values = Array.isArray(current) ? [...current] : current ? [current] : [];
+		const values: unknown[] = Array.isArray(current) ? Array.from<unknown>(current) : current ? [current] : [];
 		const already = values.some((value) => {
 			const parsed = parseLinkTarget(value);
 			return parsed !== null && parsed.split("/").pop() === targetFile.basename;
@@ -51,7 +51,7 @@ async function stripRelationFromNote(
 	const file = app.vault.getAbstractFileByPath(note.path);
 	if (!(file instanceof TFile)) return;
 
-	await app.fileManager.processFrontMatter(file, (frontmatter) => {
+	await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
 		for (const key of Object.keys(frontmatter)) {
 			const relationKey = relationKeyOf(key);
 			if (!relationKey || relationKey.kind !== kind) continue;

@@ -186,6 +186,6 @@ export class ProjectPanelView extends ItemView {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) return;
 		const leaf = this.app.workspace.getLeaf(Keymap.isModEvent(event));
-		leaf.openFile(file);
+		void leaf.openFile(file);
 	}
 }

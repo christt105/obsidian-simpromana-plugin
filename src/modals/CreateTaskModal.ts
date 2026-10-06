@@ -90,10 +90,8 @@ export class CreateTaskModal extends Modal {
 				dd.addOptions(projectOptions)
 					.setValue(NO_PROJECT)
 					.onChange((v) => {
-						this.selectedProject =
-							v === NO_PROJECT
-								? null
-								: (this.app.vault.getAbstractFileByPath(v) as TFile);
+						const file = v === NO_PROJECT ? null : this.app.vault.getAbstractFileByPath(v);
+						this.selectedProject = file instanceof TFile ? file : null;
 					});
 			});
 		}
@@ -128,10 +126,10 @@ export class CreateTaskModal extends Modal {
 		);
 
 		contentEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter" && !e.shiftKey) this.submit();
+			if (e.key === "Enter" && !e.shiftKey) void this.submit();
 		});
 
-		setTimeout(() => nameInput?.focus(), 50);
+		window.setTimeout(() => nameInput?.focus(), 50);
 	}
 
 	onClose(): void {

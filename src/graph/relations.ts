@@ -53,7 +53,7 @@ export function relationKeyOf(key: string): RelationKey | null {
 export function parseLinkTarget(raw: unknown): string | null {
 	if (typeof raw !== "string") {
 		if (raw && typeof raw === "object" && "path" in raw) {
-			return parseLinkTarget((raw as { path: unknown }).path);
+			return parseLinkTarget(raw.path);
 		}
 		return null;
 	}

@@ -458,7 +458,7 @@ export class FlowView extends ItemView {
 					.setIcon("file-text")
 					.onClick(() => {
 						const file = this.app.vault.getAbstractFileByPath(record.path);
-						if (file instanceof TFile) this.app.workspace.getLeaf(false).openFile(file);
+						if (file instanceof TFile) void this.app.workspace.getLeaf(false).openFile(file);
 					})
 			);
 			menu.addItem((item) =>
@@ -613,7 +613,7 @@ export class FlowView extends ItemView {
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) return;
 		const leaf = this.app.workspace.getLeaf(Keymap.isModEvent(event));
-		leaf.openFile(file);
+		void leaf.openFile(file);
 	}
 
 	/**

@@ -281,13 +281,13 @@ export class FlowCanvas {
 			}
 			simulation.tick();
 			this.updateSimulatedPositions();
-			this.simulationFrame = simulation.running ? requestAnimationFrame(step) : 0;
+			this.simulationFrame = simulation.running ? window.requestAnimationFrame(step) : 0;
 		};
-		this.simulationFrame = requestAnimationFrame(step);
+		this.simulationFrame = window.requestAnimationFrame(step);
 	}
 
 	private stopSimulation(): void {
-		if (this.simulationFrame) cancelAnimationFrame(this.simulationFrame);
+		if (this.simulationFrame) window.cancelAnimationFrame(this.simulationFrame);
 		this.simulationFrame = 0;
 	}
 
@@ -627,8 +627,7 @@ export class FlowCanvas {
 			height: String(node.height),
 		});
 
-		const card = document.createElement("div");
-		card.className = "spm-flow-card";
+		const card = createDiv({ cls: "spm-flow-card" });
 		card.dataset.status = statusSlug(record.status);
 		card.dataset.kind = record.kind;
 		if (node.unlinked) card.addClass("is-unlinked");
