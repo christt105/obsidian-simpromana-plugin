@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, SettingDefinitionItem } from "obsidian";
 import type SimpromanaPlugin from "./main";
 
 export interface SimpromanaSettings {
@@ -17,70 +17,34 @@ export const DEFAULT_SETTINGS: SimpromanaSettings = {
 	archiveFolder: "Archive",
 };
 
+type SettingKey = keyof SimpromanaSettings;
+
 export class SimpromanaSettingTab extends PluginSettingTab {
 	constructor(app: App, private plugin: SimpromanaPlugin) {
 		super(app, plugin);
 	}
 
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
+	getSettingDefinitions(): SettingDefinitionItem<SettingKey>[] {
+		return [
+			{
+				name: "Root folder",
+				desc: "Folder that contains Projects, Tasks, and Reference subfolders.",
+				control: { type: "text", key: "rootFolder", placeholder: "Atlas/Project Management" },
+			},
+			{ name: "Projects subfolder", control: { type: "text", key: "projectsFolder" } },
+			{ name: "Tasks subfolder", control: { type: "text", key: "tasksFolder" } },
+			{ name: "References subfolder", control: { type: "text", key: "referencesFolder" } },
+			{ name: "Archive subfolder", control: { type: "text", key: "archiveFolder" } },
+		];
+	}
 
-		new Setting(containerEl)
-			.setName("Root folder")
-			.setDesc("Folder that contains Projects, Tasks, and Reference subfolders.")
-			.addText((text) =>
-				text
-					.setPlaceholder("Atlas/Project Management")
-					.setValue(this.plugin.settings.rootFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.rootFolder = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+	getControlValue(key: string): unknown {
+		return this.plugin.settings[key as SettingKey];
+	}
 
-		new Setting(containerEl)
-			.setName("Projects subfolder")
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.projectsFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.projectsFolder = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Tasks subfolder")
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.tasksFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.tasksFolder = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("References subfolder")
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.referencesFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.referencesFolder = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Archive subfolder")
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.archiveFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.archiveFolder = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		if (typeof value !== "string") return;
+		this.plugin.settings[key as SettingKey] = value.trim();
+		await this.plugin.saveSettings();
 	}
 }
