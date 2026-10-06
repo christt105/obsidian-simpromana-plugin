@@ -18,7 +18,8 @@ kanban board, a project side panel, and commands to keep `Projects`,
   current task*, each scaffolding the right frontmatter.
 - Works alongside the core **Bases** plugin: project notes embed
   `Tasks.base` and `References.base` views for their own tasks and
-  references.
+  references. The *Setup bases* command creates whichever of the two
+  is missing in the root folder; existing files are never overwritten.
 
 ## Installation
 
@@ -88,9 +89,6 @@ nothing leaves your vault.
 
 - Frontmatter property names and status vocabulary are hardcoded across
   the plugin.
-- The *Setup bases* command generates `Tasks.base` but not
-  `References.base`; if a project note embeds it, create that file
-  manually first.
 
 ## Screenshots
 
