@@ -1,4 +1,4 @@
-import { ItemView, Keymap, Notice, TFile, ViewStateResult, WorkspaceLeaf, debounce } from "obsidian";
+import { ItemView, Keymap, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf, debounce } from "obsidian";
 import type { SimpromanaSettings } from "../settings";
 import { taskStatusList } from "../defaults";
 import type { NoteRecord } from "../graph/model";
@@ -22,6 +22,8 @@ export class BoardView extends ItemView {
 	private columnsEl: HTMLElement;
 	private emptyEl: HTMLElement;
 
+	navigation = Platform.isMobile;
+
 	constructor(leaf: WorkspaceLeaf, private settings: SimpromanaSettings) {
 		super(leaf);
 	}
@@ -35,7 +37,7 @@ export class BoardView extends ItemView {
 	}
 
 	getIcon(): string {
-		return "layout-list";
+		return "kanban";
 	}
 
 	async onOpen(): Promise<void> {

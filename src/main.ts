@@ -1,4 +1,4 @@
-import { ConfirmationModal, Notice, Plugin, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+import { ConfirmationModal, Notice, Platform, Plugin, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import { DEFAULT_SETTINGS, SimpromanaSettingTab, SimpromanaSettings } from "./settings";
 import { CreateProjectModal } from "./modals/CreateProjectModal";
 import { CreateTaskModal } from "./modals/CreateTaskModal";
@@ -29,6 +29,10 @@ export default class SimpromanaPlugin extends Plugin {
 			PROJECT_PANEL_VIEW_TYPE,
 			(leaf: WorkspaceLeaf) => new ProjectPanelView(leaf, this.settings)
 		);
+
+		this.addRibbonIcon("git-fork", "Open task flow", () => void this.openFlowView());
+		this.addRibbonIcon("kanban", "Open board", () => void this.openBoardView());
+		this.addRibbonIcon("layout-list", "Open project panel", () => void this.openProjectPanel());
 
 		this.addCommand({
 			id: "open-task-flow",
@@ -139,7 +143,7 @@ export default class SimpromanaPlugin extends Plugin {
 
 	async openFlowView(): Promise<void> {
 		const { workspace } = this.app;
-		const leaf = workspace.getLeavesOfType(FLOW_VIEW_TYPE)[0] ?? workspace.getLeaf("tab");
+		const leaf = workspace.getLeavesOfType(FLOW_VIEW_TYPE)[0] ?? workspace.getLeaf(Platform.isMobile ? false : "tab");
 		const project = activeProjectFile(this.app, this.settings);
 		const state: FlowViewState = project ? { projectPath: project.path } : {};
 
@@ -149,7 +153,7 @@ export default class SimpromanaPlugin extends Plugin {
 
 	async openBoardView(): Promise<void> {
 		const { workspace } = this.app;
-		const leaf = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0] ?? workspace.getLeaf("tab");
+		const leaf = workspace.getLeavesOfType(BOARD_VIEW_TYPE)[0] ?? workspace.getLeaf(Platform.isMobile ? false : "tab");
 		await leaf.setViewState({ type: BOARD_VIEW_TYPE, active: true });
 		await workspace.revealLeaf(leaf);
 	}
