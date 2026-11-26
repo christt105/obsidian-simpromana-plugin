@@ -3,6 +3,7 @@ import {
 	Keymap,
 	Menu,
 	Notice,
+	Platform,
 	TFile,
 	ViewStateResult,
 	WorkspaceLeaf,
@@ -87,6 +88,8 @@ export class FlowView extends ItemView {
 	private connecting = false;
 	private connectButton: HTMLButtonElement;
 	private graph: NoteGraph = { nodes: [], relations: [], unresolved: [] };
+
+	navigation = Platform.isMobile;
 
 	constructor(leaf: WorkspaceLeaf, private settings: SimpromanaSettings) {
 		super(leaf);
